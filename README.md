@@ -1,6 +1,8 @@
 # MKE Tour — Doors Open Milwaukee 2026 route
 
-A static walking-route planner for 11 downtown Doors Open Milwaukee stops (Sep 26–27, 2026).
+A static walking-route planner for 11 downtown Doors Open Milwaukee stops (Sep 26–27, 2026), laid out like a phone app: Map, List and My Plan tabs, with a detail page for each building.
+
+- Every photo, description, accessibility and photography note comes from the building's own page on historicmilwaukee.org (`info.js`, images loaded from their server)
 
 - Leaflet map with real walking routes between stops (precomputed from OpenStreetMap / OSRM foot routing, stored in `data.js`)
 - Drag (or ▲/▼) to reorder; the map, walk times, distances and arrival times update live
