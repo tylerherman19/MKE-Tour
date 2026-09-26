@@ -20,6 +20,17 @@
   if (!state.visited) state.visited = {};
   if (!Array.isArray(state.log)) state.log = [];
   if (state.others == null) state.others = true;
+  if (state.hop == null) state.hop = true;
+  if (!state.custom) state.custom = {};
+  // Breaks you add yourself (lunch, a friend's place): always "open", with their own length.
+  function registerCustom(c) {
+    c.custom = true; c.full = c.name; c.sat = c.sun = [0, 24]; c.note = c.note || "";
+    byId[c.id] = c;
+  }
+  Object.keys(state.custom).forEach(function (id) { registerCustom(state.custom[id]); });
+  function isCustom(id) { return !!(byId[id] && byId[id].custom); }
+  // Where to actually walk to: the entrance if we know it, else the address point.
+  function pt(s) { return s.door || [s.lat, s.lng]; }
 
   function valid(order) {
     if (!Array.isArray(order)) return false;
@@ -57,20 +68,24 @@
       if (rev) pts.reverse();
       return (legCache[k] = { m: r.m, s: r.s, pts: pts });
     }
-    var i = tIdx[a], j = tIdx[b], A = byId[a], B = byId[b];
-    return { m: TABLE.m[i][j], s: TABLE.s[i][j], pts: [[A.lat, A.lng], [B.lat, B.lng]], rough: true };
+    var i = tIdx[a], j = tIdx[b], A = pt(byId[a]), B = pt(byId[b]);
+    // Breaks aren't in the table: estimate from the straight line until the real path arrives.
+    if (i == null || j == null) { var est = metersBetween(A, B) * 1.3; return { m: est, s: est / WALK_MPS, pts: [A, B], rough: true, est: true }; }
+    return { m: TABLE.m[i][j], s: TABLE.s[i][j], pts: [A, B], rough: true };
   }
   function fetchLeg(a, b) {
     var k = a + "|" + b;
     if (legCache[k] || fetching[k]) return;
     fetching[k] = true;
-    var A = byId[a], B = byId[b], base = leg(a, b);
-    fetch("https://routing.openstreetmap.de/routed-foot/route/v1/foot/" + A.lng + "," + A.lat + ";" + B.lng + "," + B.lat + "?overview=full&geometries=polyline")
+    var A = pt(byId[a]), B = pt(byId[b]), base = leg(a, b);
+    fetch("https://routing.openstreetmap.de/routed-foot/route/v1/foot/" + A[1] + "," + A[0] + ";" + B[1] + "," + B[0] + "?overview=full&geometries=polyline")
       .then(function (r) { return r.json(); })
       .then(function (d) {
         if (!d.routes || !d.routes[0]) return;
-        legCache[k] = { m: base.m, s: base.s, pts: decode(d.routes[0].geometry) };
-        drawMap();
+        var m = base.est ? d.routes[0].distance : base.m;
+        legCache[k] = { m: m, s: base.est ? m / WALK_MPS : base.s, pts: decode(d.routes[0].geometry) };
+        // A break's real walk changes the timings, not just the line on the map.
+        if (base.est) render(); else drawMap();
       })
       .catch(function () {});
   }
@@ -105,14 +120,14 @@
   function schedule(ids, day, start, dwell) {
     var t = start, prev = null, walkS = 0, walkM = 0, late = 0, rows = [];
     ids.forEach(function (id) {
-      var s = byId[id], h = s[day], l = null;
+      var s = byId[id], h = s[day], l = null, stay = s.dwell || dwell;
       if (prev) { l = leg(prev, id); t += l.s / 60; walkS += l.s; walkM += l.m; }
       var arrive = t, wait = 0;
       if (arrive < h[0] * 60) { wait = h[0] * 60 - arrive; t = h[0] * 60; }
-      var lateBy = t + dwell - h[1] * 60;
+      var lateBy = t + stay - h[1] * 60;
       if (lateBy > 0) late += lateBy;
-      rows.push({ id: id, prev: prev, leg: l, arrive: arrive, wait: wait, lateBy: lateBy, leave: t + dwell });
-      t += dwell; prev = id;
+      rows.push({ id: id, prev: prev, leg: l, arrive: arrive, wait: wait, lateBy: lateBy, leave: t + stay });
+      t += stay; prev = id;
     });
     return { rows: rows, end: t, walkS: walkS, walkM: walkM, late: late };
   }
@@ -125,8 +140,11 @@
   function suggest() {
     var day = state.day, start = toMin(state.start), dwell = +state.dwell;
     var all = state.order || STOPS.map(function (s) { return s.id; });
-    var act = all.filter(function (id) { return isActive(id, day); });
-    var rest = all.filter(function (id) { return act.indexOf(id) < 0; });
+    // Breaks stay where you put them (after the same number of stops); only the sites get reshuffled.
+    var breaks = [];
+    all.filter(function (id) { return isActive(id, day); }).forEach(function (id, k) { if (isCustom(id)) breaks.push({ id: id, k: k }); });
+    var act = all.filter(function (id) { return isActive(id, day) && !isCustom(id); });
+    var rest = all.filter(function (id) { return !isActive(id, day); });
     var best = act.slice(), bestC = Infinity;
     if (act.length <= 9) {
       var used = new Array(act.length).fill(false), cur = [];
@@ -161,6 +179,7 @@
         }
       }
     }
+    breaks.forEach(function (b) { best.splice(Math.min(b.k, best.length), 0, b.id); });
     return best.concat(rest);
   }
 
@@ -195,8 +214,26 @@
   }
   function removeStop(id) {
     var i = state.order.indexOf(id);
-    if (i >= 0 && isExtra[id]) state.order.splice(i, 1);
+    if (i >= 0 && (isExtra[id] || isCustom(id))) state.order.splice(i, 1);
+    // Keep a removed break's details only if your history still points at it.
+    if (isCustom(id) && !state.log.some(function (v) { return v.id === id; })) { delete state.custom[id]; delete byId[id]; delete state.visited[id]; }
     render();
+  }
+  // Put a break in: "next" means before the first stop you haven't been to yet.
+  function addBreak(c, where) {
+    c.id = "brk-" + Date.now().toString(36);
+    state.custom[c.id] = c; registerCustom(c);
+    var act = state.order.filter(function (x) { return isActive(x, state.day); }), pos;
+    if (where === "next") {
+      var nx = act.filter(function (x) { return !state.visited[x]; })[0];
+      pos = nx ? state.order.indexOf(nx) : state.order.length;
+    } else if (where === "best") {
+      var n = detour(c, act);
+      pos = n.after ? state.order.indexOf(n.after) + 1 : n.before ? state.order.indexOf(n.before) : state.order.length;
+    } else pos = state.order.indexOf(where) + 1;
+    state.order.splice(pos, 0, c.id);
+    render();
+    toast(c.name + " added · " + c.dwell + " min");
   }
 
   // ---------- today / live status ----------
@@ -207,6 +244,7 @@
   }
   function nowMin() { var d = new Date(); return d.getHours() * 60 + d.getMinutes(); }
   function status(s, day) {
+    if (s.custom) return { cls: "open", text: "Break · " + s.dwell + " min" };
     var h = s[day], other = day === "sat" ? "sun" : "sat";
     if (!h) return { cls: "closed", text: "Closed " + DAY_LABEL[day] + (s[other] ? " · open " + DAY_LABEL[other] + " " + fmtHours(s[other]) : "") };
     if (todayKey() === day) {
@@ -224,7 +262,8 @@
 
   // ---------- links ----------
   function place(s) { return s.addr + ", Milwaukee, WI"; }
-  function q(s) { return encodeURIComponent(place(s)); }
+  // Map apps get the entrance's coordinates where we have one; a street address can land on the wrong side of a big block.
+  function q(s) { return encodeURIComponent(s.door || s.custom ? pt(s).join(",") : place(s)); }
   function appleRoute(ids, fromHere) {
     if (!ids.length) return "https://maps.apple.com/";
     var stops = ids.map(function (id) { return byId[id]; });
@@ -238,7 +277,7 @@
   }
   function appleTo(s) { return "https://maps.apple.com/directions?destination=" + q(s) + "&mode=walking"; }
   function applePlace(s) {
-    return "https://maps.apple.com/?q=" + encodeURIComponent(s.full) + "&ll=" + s.lat + "," + s.lng + "&address=" + q(s);
+    return "https://maps.apple.com/?q=" + encodeURIComponent(s.full) + "&ll=" + pt(s).join(",") + "&address=" + encodeURIComponent(place(s));
   }
   function googlePlace(s) { return "https://www.google.com/maps/dir/?api=1&travelmode=walking&destination=" + q(s); }
   function googleRoute(ids) {
@@ -255,7 +294,11 @@
   function info(id) { return INFO[id] || { photos: [], desc: [], exp: [], tags: [] }; }
   function thumb(id, cls) {
     var i = INFO[id];
+    if (isCustom(id)) return '<span class="ph brk ' + (cls || "") + '">' + icon(byId[id].kind === "home" ? "home" : "cup") + "</span>";
     return '<span class="ph ' + (cls || "") + '">' + (i ? '<img src="' + esc(i.thumb) + '" alt="" loading="lazy" decoding="async">' : "") + "</span>";
+  }
+  function enterHtml(s, cls) {
+    return s.enter ? '<span class="' + (cls || "ln") + ' door">' + icon("door", "xs") + esc(s.enter) + "</span>" : "";
   }
   var desktop = window.matchMedia("(min-width: 900px)");
   // Broken images fall back to the tinted placeholder behind them.
@@ -275,7 +318,7 @@
   function fitRoute() {
     var ids = view.act && view.act.length ? view.act : STOPS.map(function (s) { return s.id; });
     var pad = desktop.matches ? [60, 60] : [40, 40];
-    map.fitBounds(L.latLngBounds(ids.map(function (id) { return [byId[id].lat, byId[id].lng]; })), {
+    map.fitBounds(L.latLngBounds(ids.map(function (id) { return pt(byId[id]); })), {
       paddingTopLeft: desktop.matches ? [40, 180] : [30, 190], paddingBottomRight: desktop.matches ? pad : [30, 200]
     });
   }
@@ -294,7 +337,7 @@
     if (state.others) {
       EXTRAS.forEach(function (s) {
         if (inPlan(s.id) || !s[day]) return;
-        var m = L.marker([s.lat, s.lng], {
+        var m = L.marker(pt(s), {
           icon: L.divIcon({ className: "", html: '<div class="dotpin' + (s.id === view.sel ? " sel" : "") + '"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }),
           title: s.full, alt: s.full, zIndexOffset: -500
         });
@@ -305,12 +348,13 @@
     state.order.forEach(function (id) {
       var s = byId[id], r = rowBy[id], i = INFO[id], sel = id === view.sel;
       var done = !!state.visited[id];
-      var html = '<div class="pin' + (r ? "" : " off") + (sel ? " sel" : "") + (done ? " done" : "") + '"><span class="pimg">' +
-        (i ? '<img src="' + esc(i.thumb) + '" alt="">' : "") + "</span>" + (r || done ? '<span class="pn">' + (done ? "✓" : r.n) + "</span>" : "") + "</div>";
+      var html = '<div class="pin' + (r ? "" : " off") + (sel ? " sel" : "") + (done ? " done" : "") + (s.custom ? " brk" : "") + '"><span class="pimg">' +
+        (i ? '<img src="' + esc(i.thumb) + '" alt="">' : s.custom ? icon(s.kind === "home" ? "home" : "cup") : "") + "</span>" + (r || done ? '<span class="pn">' + (done ? "✓" : r.n) + "</span>" : "") + "</div>";
       var size = r ? 50 : 36;
-      var m = L.marker([s.lat, s.lng], {
+      // The pin's tip sits on the entrance, so the walking line ends at the door.
+      var m = L.marker(pt(s), {
         icon: L.divIcon({ className: "", html: html, iconSize: [size, size + 8], iconAnchor: [size / 2, size + 8] }),
-        zIndexOffset: sel ? 2000 : r ? 1000 - r.n : 0, title: s.full + (done ? " (visited)" : ""), alt: s.full
+        zIndexOffset: sel ? 2000 : r ? 1000 - r.n : 0, title: s.full + (s.enter ? " · " + s.enter : "") + (done ? " (visited)" : ""), alt: s.full
       });
       m.on("click", function () { select(id); });
       m.addTo(markerLayer); markers[id] = m;
@@ -359,6 +403,7 @@
       meMarker = L.marker(me, { icon: L.divIcon({ className: "", html: '<div class="me"></div>', iconSize: [22, 22], iconAnchor: [11, 11] }), zIndexOffset: 3000, title: "You are here", keyboard: false }).addTo(meLayer);
     } else { meMarker.setLatLng(me); meCircle.setLatLng(me).setRadius(p.coords.accuracy); }
     if (firstFix) { firstFix = false; map.setView(me, Math.max(map.getZoom(), 16)); }
+    if (wantHere) { wantHere = false; setPick({ q: "here", label: "Where you are now", addr: "±" + Math.round(fix.acc) + " m", lat: me[0], lng: me[1] }); }
     checkPresence();
     renderPeek();
     if (view.v === "history") renderHistory();
@@ -375,10 +420,12 @@
     for (var i = state.log.length - 1; i >= 0; i--) if (!state.log[i].leave) return state.log[i];
     return null;
   }
+  // Big buildings: you might be inside near the middle or standing at the door.
+  function siteDist(ll, s) { return Math.min(metersBetween(ll, [s.lat, s.lng]), s.door ? metersBetween(ll, s.door) : Infinity); }
   function nearestSite(ll) {
     var best = null;
     ALL.forEach(function (s) {
-      var d = metersBetween(ll, [s.lat, s.lng]);
+      var d = siteDist(ll, s);
       if (!best || d < best.d) best = { id: s.id, d: d };
     });
     return best;
@@ -388,7 +435,7 @@
     var now = Date.now(), open = openVisit();
     var near = nearestSite(fix.ll), nearOk = near && fix.acc <= 80 && near.d <= ENTER + Math.min(fix.acc, 35);
     if (open) {
-      var o = byId[open.id], dOpen = metersBetween(fix.ll, [o.lat, o.lng]);
+      var o = byId[open.id], dOpen = siteDist(fix.ll, o);
       var elsewhere = nearOk && near.id !== open.id && near.d < dOpen - 25;
       if (dOpen > EXIT || elsewhere) {
         if (!leaving || leaving.id !== open.id) leaving = { id: open.id, since: now };
@@ -421,10 +468,11 @@
   function clock(t) { var d = new Date(t); return fmtTime(d.getHours() * 60 + d.getMinutes()); }
   function fmtSpan(ms) { return fmtDur(Math.max(60, Math.round(ms / 1000))); }
   var toastEl = document.getElementById("toast"), toastTimer = null;
-  function toast(msg) {
+  function toast(msg, ms) {
     toastEl.textContent = msg; toastEl.classList.add("show");
+    toastEl.classList.toggle("long", msg.length > 60);
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { toastEl.classList.remove("show"); }, 4000);
+    toastTimer = setTimeout(function () { toastEl.classList.remove("show"); }, ms || 4000);
   }
 
   // Screen wake lock, so the page (and location) keeps running while you walk.
@@ -444,7 +492,83 @@
 
   function minAway(s) {
     if (!me) return null;
-    return Math.max(1, Math.round(metersBetween(me, [s.lat, s.lng]) * 1.25 / WALK_MPS / 60));
+    return Math.max(1, Math.round(metersBetween(me, pt(s)) * 1.25 / WALK_MPS / 60));
+  }
+
+  // ---------- the Hop ----------
+  // Would the streetcar beat walking to a stop? It's only worth saying so if it saves a few minutes.
+  var HOP_WORTH = 180, HOP_ASK = 600;
+  function hopFor(id, live) {
+    var r = view.rowBy && view.rowBy[id], s = byId[id];
+    if (!window.Hop || !r) return null;
+    var from = r.leg ? pt(byId[r.prev]) : null, walk = r.leg ? r.leg.s : 0;
+    // Heading there now: start from where you actually are, if the phone knows.
+    if (live && me && fix && Date.now() - fix.t < 120e3 && fix.acc < 150) { from = me; walk = metersBetween(me, pt(s)) * 1.25 / WALK_MPS; }
+    if (!from) return null;
+    var t = Hop.trip(from, pt(s), live ? 0 : 3600);
+    if (!t) return null;
+    t.walk = walk; t.saves = walk - t.total;
+    return t;
+  }
+  // Live cars only matter for the walk you're about to make today; later legs use the schedule.
+  function liveLeg(id) { return todayKey() === state.day && id === nextId() && !state.visited[id]; }
+  function hopBrief(t) {
+    return (t.live ? "car at " + t.on.name + " in " + fmtWalk(t.carIn) : "board at " + t.on.name) + ", ~" + fmtWalk(t.total) + " total";
+  }
+  function hopSteps(t) {
+    return "Walk " + fmtWalk(t.walk1) + " to " + t.on.name + ", " +
+      (t.live ? "next car there in " + fmtWalk(t.carIn) : "cars every ~" + fmtWalk(Hop.headway(t.route))) +
+      ", ride " + fmtWalk(t.ride) + " to " + t.off.name + ", then walk " + fmtWalk(t.walk2) +
+      ". About " + fmtWalk(t.total) + " vs " + fmtWalk(t.walk) + " walking. Free to ride.";
+  }
+  function hopState() {
+    if (!window.Hop) return "";
+    var st = Hop.status();
+    if (st.live) return Hop.cars().length ? "Live car positions, updated " + Math.max(1, Math.round((Date.now() - st.at) / 1000)) + " s ago." : "Live feed is up, but no streetcars are reporting right now.";
+    return "Live feed unavailable, so this uses the Hop's schedule.";
+  }
+
+  map.createPane("hop").style.zIndex = 390;
+  var hopLayer = L.layerGroup().addTo(map), hopBtn = document.getElementById("hop");
+  function drawHop() {
+    hopLayer.clearLayers();
+    hopBtn.setAttribute("aria-pressed", String(state.hop));
+    var st = window.Hop ? Hop.status() : null;
+    hopBtn.classList.toggle("live", !!(st && st.live && Hop.cars().length));
+    hopBtn.title = st ? hopState() : "";
+    if (!state.hop || !window.Hop) return;
+    Hop.routes().forEach(function (rt) {
+      rt.stops.forEach(function (s) {
+        L.polyline(s.pts, { pane: "hop", color: rt.color, weight: 3, opacity: 0.55, interactive: false }).addTo(hopLayer);
+      });
+      rt.stops.forEach(function (s) {
+        var m = L.circleMarker(s.ll, { pane: "hop", radius: 4, color: rt.color, weight: 2, fillColor: "#fff", fillOpacity: 1 });
+        m.bindPopup(function () {
+          var arr = Hop.arrivals(rt, s).slice(0, 2).map(function (a) { return a.eta < 60 ? "now" : fmtWalk(a.eta); });
+          return "<b>" + esc(s.name) + "</b><br>The Hop · " + esc(rt.name) + "<br>" +
+            (arr.length && Hop.status().live ? "Next car: " + arr.join(", then ") : "Cars about every " + fmtWalk(Hop.headway(rt)) + " (schedule)");
+        });
+        m.addTo(hopLayer);
+      });
+    });
+    Hop.cars().forEach(function (c) {
+      var rt = Hop.routes().filter(function (r) { return r.id === c.route; })[0], color = rt ? rt.color : "#6d27b8";
+      L.marker(c.ll, {
+        icon: L.divIcon({ className: "", html: '<div class="car" style="--c:' + color + '"><i style="transform:rotate(' + c.heading + 'deg)"></i>' + icon("tram", "xs") + "</div>", iconSize: [26, 26], iconAnchor: [13, 13] }),
+        zIndexOffset: -200, keyboard: false, title: c.name + " · position " + Math.round(c.age + (Date.now() - Hop.status().at) / 1000) + " s old"
+      }).addTo(hopLayer);
+    });
+  }
+  hopBtn.addEventListener("click", function () {
+    state.hop = !state.hop; save(); drawHop();
+    toast(state.hop ? "Showing the Hop streetcar · " + hopState() : "Hop streetcar hidden");
+  });
+  function onHop() {
+    drawHop();
+    if (dragging) return;
+    renderPeek();
+    renderPlan();
+    if (view.v === "stop" && view.tab === "info") renderDetail();
   }
 
   var layersBtn = document.getElementById("layers");
@@ -502,11 +626,14 @@
     listEl.classList.toggle("editing", view.edit);
     listEl.innerHTML = ordered.map(function (id) {
       var s = byId[id], r = rowBy[id], h = s[day], idx = state.order.indexOf(id);
-      var lines = [];
-      if (r && r.leg) lines.push('<p class="ln">' + icon("walk", "xs") + fmtWalk(r.leg.s) + " walk · " + fmtMi(r.leg.m) + "</p>");
+      var lines = [], hop = r && r.leg ? hopFor(id, liveLeg(id)) : null;
+      if (r && r.leg) lines.push('<p class="ln">' + icon("walk", "xs") + fmtWalk(r.leg.s) + " walk · " + fmtMi(r.leg.m) +
+        (hop && hop.saves >= HOP_WORTH ? ' <span class="hopchip" role="button" tabindex="0" data-hop="' + id + '" title="' + esc(hopSteps(hop)) + '">' + icon("tram", "xs") + "Hop ~" + fmtWalk(hop.total) + "</span>" : "") + "</p>");
       else if (r) lines.push('<p class="ln">' + icon("pin", "xs") + "First stop" + "</p>");
       else lines.push('<p class="ln">' + icon("pin", "xs") + esc(s.addr) + "</p>");
+      if (s.custom && r) lines.push('<p class="ln">' + icon("pin", "xs") + esc(s.addr) + "</p>");
       lines.push('<p class="ln">' + statusHtml(s, day) + (r ? '<span class="arr">Arrive ' + fmtTime(r.arrive) + "</span>" : "") + "</p>");
+      if (s.enter && r) lines.push('<p class="ln door">' + icon("door", "xs") + esc(s.enter) + "</p>");
       if (state.visited[id]) lines.push('<p class="flag ok">' + icon("check", "xs") + "Visited</p>");
       if (h && state.skip[id]) lines.push('<p class="flag">Skipped</p>');
       if (r && r.wait > 0) lines.push('<p class="flag warn">Opens ' + fmtHour(h[0]) + ", about " + Math.round(r.wait) + " min wait</p>");
@@ -514,7 +641,7 @@
       var edit = '<div class="editrow">' +
         '<button type="button" data-up="' + idx + '"' + (idx === 0 ? " disabled" : "") + ' aria-label="Move ' + esc(s.name) + ' earlier">' + icon("up", "sm") + "</button>" +
         '<button type="button" data-down="' + idx + '"' + (idx === state.order.length - 1 ? " disabled" : "") + ' aria-label="Move ' + esc(s.name) + ' later">' + icon("down", "sm") + "</button>" +
-        (isExtra[id] ? '<button type="button" data-remove="' + id + '">Remove</button>' :
+        (isExtra[id] || s.custom ? '<button type="button" data-remove="' + id + '">Remove</button>' :
           h ? '<button type="button" data-skip="' + id + '">' + (state.skip[id] ? "Add back" : "Skip") + "</button>" : "") + "</div>";
       var done = !!state.visited[id];
       var num = '<span class="num">' + (done ? icon("check", "sm") : r ? r.n : "–") + "</span>";
@@ -601,9 +728,17 @@
     var here = openVisit();
     if (here && here.id === id) kick = "Here now · " + fmtSpan(Date.now() - here.arrive);
     var sub = away != null ? "~" + away + " min away" : r ? "Arrive " + fmtTime(r.arrive) : "";
+    // Up next: would the Hop get you there faster than walking, right now?
+    var hopLn = "";
+    if (r && !done && id === nextId()) {
+      var hop = hopFor(id, liveLeg(id));
+      if (hop && hop.saves >= HOP_WORTH) hopLn = '<span class="ln hopln good" data-hop="' + id + '">' + icon("tram", "xs") + "Hop saves " + fmtWalk(hop.saves) + " · " + esc(hopBrief(hop)) + "</span>";
+      else if (hop && hop.walk >= HOP_ASK) hopLn = '<span class="ln hopln" data-hop="' + id + '">' + icon("tram", "xs") + "Walking is quicker than the Hop" + (hop.live ? " (next car " + fmtWalk(hop.carIn) + ")" : "") + "</span>";
+    }
     return '<div class="pslide" data-id="' + id + '"><button type="button" class="card" data-open="' + id + '">' + thumb(id, "pth") +
       '<span class="txt"><span class="kick">' + esc(kick) + '</span><span class="nm">' + esc(s.name) + "</span>" +
-      '<span class="ln">' + statusHtml(s, state.day) + "</span>" + (sub ? '<span class="ln psub">' + esc(sub) + "</span>" : "") + "</span></button>" +
+      '<span class="ln">' + statusHtml(s, state.day) + "</span>" + (sub ? '<span class="ln psub">' + esc(sub) + "</span>" : "") +
+      enterHtml(s, "ln psub") + hopLn + "</span></button>" +
       (s[state.day] || done ? '<button type="button" class="chev check" data-visit="' + id + '" aria-pressed="' + done + '" aria-label="' + (done ? "Uncheck " : "Check off ") + esc(s.name) + '">' + icon("check") + "</button>" : "") + "</div>";
   }
   function renderPeek() {
@@ -639,7 +774,7 @@
       view.sel = id;
       drawMap(); highlightRow(id);
       // Keep the stop visible above the card.
-      map.panInside([st.lat, st.lng], { paddingTopLeft: [40, 190], paddingBottomRight: [40, peekEl.offsetHeight + 90] });
+      map.panInside(pt(st), { paddingTopLeft: [40, 190], paddingBottomRight: [40, peekEl.offsetHeight + 90] });
     }, 90);
   }
 
@@ -728,11 +863,16 @@
       var legLine = "";
       if (r && r.leg) legLine = fmtWalk(r.leg.s) + " walk (" + fmtMi(r.leg.m) + ") from " + esc(byId[r.prev].name) + ", arrive " + fmtTime(r.arrive);
       else if (r) legLine = "First stop, arrive " + fmtTime(r.arrive);
+      var hop = hopFor(id, liveLeg(id));
+      if (hop && hop.saves < HOP_WORTH && hop.walk < HOP_ASK) hop = null;
       body = '<dl class="facts">' +
         fact("Address", esc(s.addr) + (s.note ? "<br><span class=\"muted\">" + esc(s.note) + "</span>" : "")) +
+        (s.enter || s.door ? fact("Entrance", (s.enter ? esc(s.enter) : "Pin is on the entrance.") + ' <span class="muted">Map pin and directions go to this door.</span>') : "") +
         fact("Saturday", s.sat ? fmtHours(s.sat) : "Not open") +
         fact("Sunday", s.sun ? fmtHours(s.sun) : "Not open") +
         (legLine ? fact("Your plan", legLine) : "") +
+        (hop ? fact("The Hop", (hop.saves >= HOP_WORTH ? "Saves about " + fmtWalk(hop.saves) + ". " : "Walking is quicker. ") + esc(hopSteps(hop)) +
+          ' <span class="muted">' + esc(hopState()) + "</span>") : "") +
         (i.access ? fact("Accessibility", esc(i.access)) : "") +
         (i.photo ? fact("Photography", esc(i.photo)) : "") +
         (i.tags && i.tags.length ? fact("Interests", i.tags.map(esc).join(", ")) : "") + "</dl>" +
@@ -763,7 +903,7 @@
       '<a href="' + applePlace(s) + '" target="_blank" rel="noopener">Open in Apple Maps</a><a href="' + googlePlace(s) + '" target="_blank" rel="noopener">Open in Google Maps</a>' +
       '<button type="button" data-showmap="' + id + '">Show on map</button></div></div>' +
       '<div class="herotext"><p class="eyebrow">' + esc(eyebrow(id)) + '</p><h2 id="d-name">' + esc(s.full) + "</h2>" +
-      '<p class="hl">' + icon("pin", "sm") + esc(s.addr) + "</p><p class=\"hl\">" + statusHtml(s, day) +
+      '<p class="hl">' + icon("pin", "sm") + esc(s.addr) + "</p>" + (s.enter ? '<p class="hl door">' + icon("door", "sm") + esc(s.enter) + "</p>" : "") + "<p class=\"hl\">" + statusHtml(s, day) +
       (r ? '<span class="arr">Arrive ' + fmtTime(r.arrive) + "</span>" : "") + "</p>" +
       (s[day] || state.visited[id] ? '<button type="button" class="visitbtn" data-visit="' + id + '" aria-pressed="' + !!state.visited[id] + '">' + icon("check", "sm") +
         (state.visited[id] ? "Visited · tap to undo" : "Mark as visited") + "</button>" : "") + "</div></div>" +
@@ -784,7 +924,7 @@
   function route() {
     var h = decodeURIComponent(location.hash.slice(1));
     var v;
-    if (h.indexOf("stop/") === 0 && byId[h.slice(5)]) {
+    if (h.indexOf("stop/") === 0 && byId[h.slice(5)] && !isCustom(h.slice(5))) {
       v = "stop";
       if (view.detail !== h.slice(5)) { view.detail = h.slice(5); view.tab = "overview"; }
       view.sel = view.detail;
@@ -821,7 +961,92 @@
     var s = byId[id];
     view.sel = id;
     go(desktop.matches ? "plan" : "map");
-    setTimeout(function () { map.setView([s.lat, s.lng], 17); }, 80);
+    setTimeout(function () { map.setView(pt(s), 17); }, 80);
+  }
+
+  // ---------- breaks (lunch, a friend's place) ----------
+  var HELEN = { name: "Helen's", addr: "740 N Plankinton Ave", lat: 43.03969, lng: -87.91152, door: [43.03978, -87.91162], kind: "home" };
+  var brk = document.getElementById("brk"), brkPick = null, wantHere = false, searching = false;
+  var brkWhere = document.getElementById("brk-where"), brkRes = document.getElementById("brk-results");
+  var brkName = document.getElementById("brk-name"), brkMin = document.getElementById("brk-min"), brkAfter = document.getElementById("brk-after");
+  function openBreak() {
+    var act = view.act.filter(function (id) { return byId[id]; });
+    var nx = act.filter(function (id) { return !state.visited[id]; })[0];
+    var anyVisited = act.some(function (id) { return state.visited[id]; });
+    brkAfter.innerHTML = (nx ? '<option value="next">Next, before ' + esc(byId[nx].name) + "</option>" : "") +
+      '<option value="best">Where it adds the least walking</option>' +
+      act.map(function (id, k) { return '<option value="' + id + '">After ' + (k + 1) + " · " + esc(byId[id].name) + "</option>"; }).join("");
+    brkAfter.value = nx && anyVisited ? "next" : "best";
+    setPick(brkPick);
+    if (brk.showModal) brk.showModal(); else brk.setAttribute("open", "");
+  }
+  function closeBreak() { if (brk.close) brk.close(); else brk.removeAttribute("open"); }
+  function setPick(p) {
+    brkPick = p;
+    brkWhere.innerHTML = p ? icon("pin", "xs") + "<b>" + esc(p.label || p.name || "Picked spot") + "</b> · " + esc(p.addr || "") : "Pick a place above, search, or tap the map.";
+    document.getElementById("brk-add").disabled = !p;
+    brk.querySelectorAll("[data-bq]").forEach(function (b) { b.setAttribute("aria-pressed", String(!!p && p.q === b.dataset.bq)); });
+  }
+  function shortAddr(a) {
+    if (!a) return "";
+    return [a.house_number, a.road].filter(Boolean).join(" ") || a.neighbourhood || a.suburb || "";
+  }
+  brk.addEventListener("click", function (e) {
+    var b = e.target.closest("button, li[data-i]");
+    if (!b) { if (e.target === brk) closeBreak(); return; }
+    if (b.dataset.bq === "helen") {
+      setPick({ q: "helen", name: HELEN.name, addr: HELEN.addr, lat: HELEN.lat, lng: HELEN.lng, door: HELEN.door, kind: "home" });
+      if (!brkName.value || brkName.value === "Lunch") brkName.value = HELEN.name;
+    } else if (b.dataset.bq === "here") {
+      if (me && fix && Date.now() - fix.t < 120e3) setPick({ q: "here", label: "Where you are now", addr: "±" + Math.round(fix.acc) + " m", lat: me[0], lng: me[1] });
+      else { wantHere = true; brkWhere.textContent = "Finding you…"; startLocation(); }
+    } else if (b.dataset.bq === "map") {
+      closeBreak();
+      if (!desktop.matches) go("map");
+      toast("Tap the map where the break is", 6000);
+      app.classList.add("picking");
+      map.once("click", function (ev) {
+        app.classList.remove("picking");
+        var p = { q: "map", label: "Dropped pin", addr: "", lat: ev.latlng.lat, lng: ev.latlng.lng };
+        setPick(p); openBreak();
+        fetch("https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&lat=" + p.lat + "&lon=" + p.lng)
+          .then(function (r) { return r.json(); })
+          .then(function (d) { if (brkPick === p) { p.label = d.name || "Dropped pin"; p.addr = shortAddr(d.address); setPick(p); } })
+          .catch(function () {});
+      });
+    } else if (b.id === "brk-go") {
+      searchPlaces();
+    } else if (b.dataset.i != null) {
+      var r = brkRes._list[+b.dataset.i];
+      setPick({ q: "search", name: r.name, addr: r.addr, lat: r.lat, lng: r.lng });
+      if (!brkName.value || brkName.value === "Lunch" || brkName.value === HELEN.name) brkName.value = r.name.slice(0, 40);
+    } else if (b.id === "brk-add") {
+      if (!brkPick) return;
+      var mins = Math.max(5, Math.min(240, Math.round(+brkMin.value) || 45));
+      var c = { name: (brkName.value || "Break").trim().slice(0, 40), addr: brkPick.addr || "Dropped pin", lat: brkPick.lat, lng: brkPick.lng, dwell: mins, kind: brkPick.kind || "meal" };
+      if (brkPick.door) c.door = brkPick.door;
+      closeBreak();
+      addBreak(c, brkAfter.value);
+      brkPick = null; brkRes.innerHTML = ""; brkName.value = "Lunch";
+    } else if (b.id === "brk-cancel") closeBreak();
+  });
+  document.getElementById("brk-q").addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); searchPlaces(); } });
+  // Place search: OpenStreetMap's Nominatim, limited to downtown. One request per search, never per keystroke.
+  function searchPlaces() {
+    var qv = document.getElementById("brk-q").value.trim();
+    if (!qv || searching) return;
+    searching = true;
+    brkRes.innerHTML = '<li class="muted">Searching…</li>';
+    fetch("https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=6&bounded=1&viewbox=-87.96,43.06,-87.88,43.02&q=" + encodeURIComponent(qv))
+      .then(function (r) { return r.json(); })
+      .then(function (list) {
+        brkRes._list = list.map(function (x) { return { name: x.name || x.display_name.split(",")[0], addr: shortAddr(x.address), lat: +x.lat, lng: +x.lon }; });
+        brkRes.innerHTML = brkRes._list.length ? brkRes._list.map(function (x, i) {
+          return '<li data-i="' + i + '" tabindex="0" role="button"><b>' + esc(x.name) + "</b><span>" + esc(x.addr) + "</span></li>";
+        }).join("") : '<li class="muted">Nothing downtown matches. Try an address, or tap the map.</li>';
+      })
+      .catch(function () { brkRes.innerHTML = '<li class="muted">Search isn\'t reachable right now. Tap the map instead.</li>'; })
+      .finally(function () { searching = false; });
   }
 
   // ---------- lightbox ----------
@@ -856,12 +1081,23 @@
     if (navigated) history.back();
     else location.hash = lastMain;
   }
+  function showHop(id) {
+    var t = hopFor(id, liveLeg(id));
+    if (t) toast("The Hop to " + byId[id].name + ": " + hopSteps(t), 9000);
+  }
+  app.addEventListener("keydown", function (e) {
+    var h = e.target.closest && e.target.closest(".hopchip");
+    if (h && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); showHop(h.dataset.hop); }
+  });
   app.addEventListener("click", function (e) {
+    var hc = e.target.closest("[data-hop]");
+    if (hc) { peekBusy = false; showHop(hc.dataset.hop); return; }
     var b = e.target.closest("button, a");
     if (!b || !app.contains(b)) return;
     peekBusy = false;
     var d = b.dataset;
-    if (d.open) { go("stop/" + d.open); return; }
+    if (d.open) { if (isCustom(d.open)) showOnMap(d.open); else go("stop/" + d.open); return; }
+    if (b.id === "add-break") { openBreak(); return; }
     if (d.add) { addStop(d.add); return; }
     if (d.visit) { toggleVisited(d.visit); return; }
     if (b.id === "clear-visited") { if (confirm("Clear all check-offs?")) { state.visited = {}; render(); } return; }
@@ -1034,4 +1270,6 @@
   render();
   route();
   fitRoute();
+  if (window.Hop) { Hop.onChange(onHop); Hop.start(); }
+  drawHop();
 })();
