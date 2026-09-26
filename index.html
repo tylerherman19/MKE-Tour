@@ -39,11 +39,16 @@
       <p class="hint">Drag <span class="grip-inline" aria-hidden="true"></span> or use the arrows to reorder. Stops closed on the selected day stay in the list but are left off the route.</p>
     </header>
     <ol class="stops" id="stops"></ol>
+    <section class="nearwrap" aria-labelledby="near-h">
+      <h2 id="near-h">Along your route</h2>
+      <p class="hint">Other Doors Open sites open on the selected day, ranked by the extra walking they add. Add one and it drops into the best spot in your order.</p>
+      <ul class="nearlist" id="nearby"></ul>
+    </section>
     <footer class="foot">
       Hours from the Historic Milwaukee 9/24/26 printable site list. Walk times are estimates at about 2.8 mph from OpenStreetMap routing. Check <a href="https://historicmilwaukee.org/doors-open/buildings/" target="_blank" rel="noopener">historicmilwaukee.org</a> for last-minute changes.
     </footer>
   </aside>
-  <main class="mapwrap"><div id="map" aria-label="Map of route"></div></main>
+  <main class="mapwrap"><div id="map" aria-label="Map of route"></div><button type="button" class="btn maptoggle" id="maptoggle" aria-pressed="false">Smaller map</button></main>
 </div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js"></script>

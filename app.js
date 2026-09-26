@@ -1,9 +1,11 @@
 (function () {
   "use strict";
 
-  var STOPS = window.STOPS, ROUTES = window.ROUTES;
-  var byId = {};
+  var STOPS = window.STOPS, EXTRAS = window.EXTRAS || [], ROUTES = window.ROUTES, TABLE = window.TABLE;
+  var byId = {}, isExtra = {}, tIdx = {};
   STOPS.forEach(function (s) { byId[s.id] = s; });
+  EXTRAS.forEach(function (s) { byId[s.id] = s; isExtra[s.id] = true; });
+  TABLE.ids.forEach(function (id, i) { tIdx[id] = i; });
   var DAY_LABEL = { sat: "Sat", sun: "Sun" };
   var KEY = "mke-doors-open-2026";
 
@@ -15,8 +17,10 @@
   if (!state.skip) state.skip = {};
 
   function valid(order) {
-    return Array.isArray(order) && order.length === STOPS.length &&
-      order.every(function (id) { return byId[id]; });
+    if (!Array.isArray(order)) return false;
+    var seen = {};
+    return order.every(function (id) { if (!byId[id] || seen[id]) return false; return (seen[id] = true); }) &&
+      STOPS.every(function (s) { return seen[s.id]; });
   }
   function load() { try { return JSON.parse(localStorage.getItem(KEY)); } catch (e) { return null; } }
   function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
@@ -35,15 +39,35 @@
     }
     return out;
   }
-  var legCache = {};
+  // Legs between the planned stops ship with the page. Legs to added sites use the
+  // precomputed time/distance table and fetch their path on demand (straight line until then).
+  var legCache = {}, fetching = {};
   function leg(a, b) {
     var k = a + "|" + b;
     if (legCache[k]) return legCache[k];
     var r = ROUTES[k], rev = false;
     if (!r) { r = ROUTES[b + "|" + a]; rev = true; }
-    var pts = decode(r.g);
-    if (rev) pts.reverse();
-    return (legCache[k] = { m: r.m, s: r.s, pts: pts });
+    if (r) {
+      var pts = decode(r.g);
+      if (rev) pts.reverse();
+      return (legCache[k] = { m: r.m, s: r.s, pts: pts });
+    }
+    var i = tIdx[a], j = tIdx[b], A = byId[a], B = byId[b];
+    return { m: TABLE.m[i][j], s: TABLE.s[i][j], pts: [[A.lat, A.lng], [B.lat, B.lng]], rough: true };
+  }
+  function fetchLeg(a, b) {
+    var k = a + "|" + b;
+    if (legCache[k] || fetching[k]) return;
+    fetching[k] = true;
+    var A = byId[a], B = byId[b], base = leg(a, b);
+    fetch("https://routing.openstreetmap.de/routed-foot/route/v1/foot/" + A.lng + "," + A.lat + ";" + B.lng + "," + B.lat + "?overview=full&geometries=polyline")
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.routes || !d.routes[0]) return;
+        legCache[k] = { m: base.m, s: base.s, pts: decode(d.routes[0].geometry) };
+        drawMap();
+      })
+      .catch(function () {});
   }
 
   // ---------- schedule ----------
@@ -56,7 +80,11 @@
     var h12 = h % 12 || 12;
     return h12 + ":" + (m < 10 ? "0" : "") + m + " " + ap;
   }
-  function fmtHour(h) { var ap = h >= 12 ? "pm" : "am"; return (h % 12 || 12) + " " + ap; }
+  function fmtHour(h) {
+    var ap = h >= 12 ? "pm" : "am", mm = Math.round((h % 1) * 60), hh = Math.floor(h);
+    return (hh % 12 || 12) + (mm ? ":" + (mm < 10 ? "0" : "") + mm : "") + " " + ap;
+  }
+  function fmtHours(h) { return fmtHour(h[0]) + "–" + fmtHour(h[1]); }
   function fmtMi(m) { return (m / 1609.34).toFixed(m < 1609 ? 2 : 1) + " mi"; }
   function fmtDur(sec) {
     var min = Math.round(sec / 60);
@@ -86,8 +114,9 @@
   // Best order for the active stops: exhaustive for up to 9, else nearest-neighbour + 2-opt.
   function suggest() {
     var day = state.day, start = toMin(state.start), dwell = +state.dwell;
-    var act = STOPS.map(function (s) { return s.id; }).filter(function (id) { return isActive(id, day); });
-    var rest = (state.order || STOPS.map(function (s) { return s.id; })).filter(function (id) { return act.indexOf(id) < 0; });
+    var all = state.order || STOPS.map(function (s) { return s.id; });
+    var act = all.filter(function (id) { return isActive(id, day); });
+    var rest = all.filter(function (id) { return act.indexOf(id) < 0; });
     var best = act.slice(), bestC = Infinity;
     if (act.length <= 9) {
       var used = new Array(act.length).fill(false), cur = [];
@@ -125,6 +154,35 @@
     return best.concat(rest);
   }
 
+  // Open sites not in the list, ranked by the extra walking it takes to fit them in.
+  function nearby(act, day) {
+    var inList = {};
+    state.order.forEach(function (id) { inList[id] = true; });
+    return EXTRAS.filter(function (s) { return !inList[s.id] && s[day]; }).map(function (s) {
+      var best = { add: Infinity, after: null };
+      if (!act.length) return { s: s, add: 0, after: null, before: null };
+      for (var i = 0; i <= act.length; i++) {
+        var p = act[i - 1], n = act[i], add;
+        if (p && n) add = leg(p, s.id).s + leg(s.id, n).s - leg(p, n).s;
+        else if (p) add = leg(p, s.id).s;
+        else add = leg(s.id, n).s;
+        if (add < best.add) best = { add: add, after: p || null, before: n || null };
+      }
+      best.s = s;
+      return best;
+    }).sort(function (a, b) { return a.add - b.add; });
+  }
+  function addStop(id) {
+    var day = state.day, act = state.order.filter(function (x) { return isActive(x, day); });
+    var n = nearby(act, day).filter(function (x) { return x.s.id === id; })[0];
+    var pos = state.order.length;
+    if (n && n.after) pos = state.order.indexOf(n.after) + 1;
+    else if (n && n.before) pos = state.order.indexOf(n.before);
+    state.order.splice(pos, 0, id);
+    render();
+    highlight(id, true);
+  }
+
   // ---------- links ----------
   function place(s) { return s.addr + ", Milwaukee, WI"; }
   function q(s) { return encodeURIComponent(place(s)); }
@@ -160,13 +218,14 @@
     maxZoom: 19,
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
   }).addTo(map);
-  var routeLayer = L.layerGroup().addTo(map), markerLayer = L.layerGroup().addTo(map);
+  var nearLayer = L.layerGroup().addTo(map), routeLayer = L.layerGroup().addTo(map), markerLayer = L.layerGroup().addTo(map);
   var markers = {}, legLines = {};
   map.fitBounds(L.latLngBounds(STOPS.map(function (s) { return [s.lat, s.lng]; })).pad(0.12));
   var accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#d2430f";
 
   // ---------- render ----------
-  var listEl = document.getElementById("stops");
+  var listEl = document.getElementById("stops"), nearEl = document.getElementById("nearby");
+  var showAllNear = false, view = {};
   function render() {
     var day = state.day, start = toMin(state.start), dwell = +state.dwell;
     var act = state.order.filter(function (id) { return isActive(id, day); });
@@ -180,7 +239,7 @@
 
     // summary
     document.getElementById("summary").innerHTML =
-      cell("Stops", act.length + " / " + STOPS.length) +
+      cell("Stops", act.length + " / " + state.order.length) +
       cell("Walking", fmtDur(sch.walkS)) +
       cell("Distance", fmtMi(sch.walkM)) +
       cell("Done by", act.length ? fmtTime(sch.end) : "–");
@@ -194,9 +253,10 @@
     listEl.innerHTML = state.order.map(function (id, idx) {
       var s = byId[id], r = rowBy[id], h = s[day], other = day === "sat" ? "sun" : "sat";
       var pills = [];
-      if (!h) pills.push('<span class="pill bad">Closed ' + DAY_LABEL[day] + (s[other] ? " · open " + DAY_LABEL[other] + " " + fmtHour(s[other][0]) + "–" + fmtHour(s[other][1]) : "") + "</span>");
-      else pills.push('<span class="pill">' + DAY_LABEL[day] + " " + fmtHour(h[0]) + "–" + fmtHour(h[1]) + "</span>");
+      if (!h) pills.push('<span class="pill bad">Closed ' + DAY_LABEL[day] + (s[other] ? " · open " + DAY_LABEL[other] + " " + fmtHours(s[other]) : "") + "</span>");
+      else pills.push('<span class="pill">' + DAY_LABEL[day] + " " + fmtHours(h) + "</span>");
       if (h && state.skip[id]) pills.push('<span class="pill">Skipped</span>');
+      if (isExtra[id]) pills.push('<span class="pill added">Added</span>');
       if (r) {
         pills.unshift('<span class="pill arrive">Arrive ' + fmtTime(r.arrive) + "</span>");
         if (r.wait > 0) pills.push('<span class="pill warn">Opens ' + fmtHour(h[0]) + ", wait " + Math.round(r.wait) + " min</span>");
@@ -207,7 +267,8 @@
         var prev = sch.rows[r.n - 2].id;
         legHtml = '<div class="leg"><span>Walk <b>' + fmtDur(r.leg.s) + "</b> · " + fmtMi(r.leg.m) + " from " + esc(byId[prev].name) + '</span><a href="' + appleLeg(prev, id) + '" target="_blank" rel="noopener">Directions</a></div>';
       }
-      var skipBtn = h ? '<button type="button" data-skip="' + id + '">' + (state.skip[id] ? "Add back" : "Skip") + "</button>" : "";
+      var skipBtn = isExtra[id] ? '<button type="button" data-remove="' + id + '">Remove</button>' :
+        h ? '<button type="button" data-skip="' + id + '">' + (state.skip[id] ? "Add back" : "Skip") + "</button>" : "";
       return '<li class="stop' + (r ? "" : " off") + '" data-id="' + id + '">' + legHtml +
         '<div class="row"><span class="grip" aria-hidden="true"></span>' +
         '<span class="num">' + (r ? r.n : "–") + "</span>" +
@@ -220,15 +281,43 @@
         "</div></li>";
     }).join("");
 
-    // map
-    routeLayer.clearLayers(); markerLayer.clearLayers(); markers = {}; legLines = {};
-    sch.rows.forEach(function (r) {
+    // nearby
+    var near = nearby(act, day).filter(function (x) { return x.add <= 20 * 60; });
+    var shown = showAllNear ? near : near.slice(0, 8);
+    nearEl.innerHTML = near.length ? shown.map(function (x) {
+      var s = x.s, where = x.after && x.before ? "between " + esc(byId[x.after].name) + " and " + esc(byId[x.before].name)
+        : x.after ? "after " + esc(byId[x.after].name) : x.before ? "before " + esc(byId[x.before].name) : "";
+      return '<li class="near" data-near="' + s.id + '"><div><p class="name"><a href="' + s.url + '" target="_blank" rel="noopener">' + esc(s.name) + '</a></p>' +
+        '<p class="addr">' + esc(s.addr) + " · " + DAY_LABEL[day] + " " + fmtHours(s[day]) + "</p>" +
+        '<p class="detour"><b>+' + Math.max(1, Math.round(x.add / 60)) + " min walk</b> " + where + "</p></div>" +
+        '<button type="button" class="btn add" data-add="' + s.id + '" aria-label="Add ' + esc(s.name) + '">Add</button></li>';
+    }).join("") + (near.length > 8 ? '<li class="more"><button type="button" class="btn ghost" id="near-more">' + (showAllNear ? "Show fewer" : "Show all " + near.length) + "</button></li>" : "")
+      : '<li class="empty">No other open sites within a short walk.</li>';
+
+    view = { day: day, sch: sch, rowBy: rowBy, near: shown };
+    drawMap();
+    save();
+  }
+
+  function drawMap() {
+    var day = view.day, sch = view.sch, rowBy = view.rowBy;
+    nearLayer.clearLayers(); routeLayer.clearLayers(); markerLayer.clearLayers(); markers = {}; legLines = {};
+    sch.rows.forEach(function (r, i) {
       if (!r.leg) return;
-      L.polyline(r.leg.pts, { color: "#000", weight: 7, opacity: 0.12 }).addTo(routeLayer);
-      legLines[r.id] = L.polyline(r.leg.pts, { color: accent, weight: 4, opacity: 0.9 }).addTo(routeLayer);
+      var prev = sch.rows[i - 1].id, l = leg(prev, r.id);
+      if (l.rough) fetchLeg(prev, r.id);
+      L.polyline(l.pts, { color: "#000", weight: 7, opacity: 0.12 }).addTo(routeLayer);
+      legLines[r.id] = L.polyline(l.pts, { color: accent, weight: 4, opacity: 0.9, dashArray: l.rough ? "6 6" : null }).addTo(routeLayer);
     });
-    STOPS.forEach(function (s) {
-      var r = rowBy[s.id];
+    view.near.forEach(function (x) {
+      var s = x.s;
+      var m = L.marker([s.lat, s.lng], { icon: L.divIcon({ className: "", html: '<div class="mk near"></div>', iconSize: [14, 14], iconAnchor: [7, 7] }), title: s.name, zIndexOffset: -500 });
+      m.bindPopup("<strong>" + esc(s.full) + "</strong><br>" + esc(s.addr) + "<br>" + DAY_LABEL[day] + " " + fmtHours(s[day]) +
+        " · +" + Math.max(1, Math.round(x.add / 60)) + ' min walk<br><button type="button" class="btn add" data-add="' + s.id + '">Add to route</button>');
+      m.addTo(nearLayer); markers[s.id] = m;
+    });
+    state.order.forEach(function (id) {
+      var s = byId[id], r = rowBy[s.id];
       var icon = L.divIcon({ className: "", html: '<div class="mk' + (r ? "" : " off") + '">' + (r ? r.n : "") + "</div>", iconSize: [28, 28], iconAnchor: [14, 14] });
       var m = L.marker([s.lat, s.lng], { icon: icon, zIndexOffset: r ? 1000 - r.n : 0, title: s.name });
       m.bindPopup("<strong>" + esc(s.full) + "</strong><br>" + esc(s.addr) + "<br>" +
@@ -237,7 +326,6 @@
       m.on("click", function () { highlight(s.id, true); });
       m.addTo(markerLayer); markers[s.id] = m;
     });
-    save();
   }
   function esc(t) { return String(t).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
 
@@ -263,6 +351,7 @@
       if (b.dataset.up != null) { i = +b.dataset.up; swap(i, i - 1); }
       else if (b.dataset.down != null) { i = +b.dataset.down; swap(i, i + 1); }
       else if (b.dataset.skip) { state.skip[b.dataset.skip] = !state.skip[b.dataset.skip]; render(); }
+      else if (b.dataset.remove) { state.order.splice(state.order.indexOf(b.dataset.remove), 1); render(); }
       return;
     }
     if (e.target.closest("a")) return;
@@ -273,6 +362,22 @@
       map.panTo([s.lat, s.lng]);
       markers[s.id].openPopup();
     }
+  });
+  nearEl.addEventListener("click", function (e) {
+    var b = e.target.closest("button");
+    if (b && b.dataset.add) { addStop(b.dataset.add); return; }
+    if (b && b.id === "near-more") { showAllNear = !showAllNear; render(); return; }
+    if (e.target.closest("a")) return;
+    var li = e.target.closest(".near");
+    if (li && markers[li.dataset.near]) {
+      var s = byId[li.dataset.near];
+      map.panTo([s.lat, s.lng]);
+      markers[s.id].openPopup();
+    }
+  });
+  document.getElementById("map").addEventListener("click", function (e) {
+    var b = e.target.closest("button[data-add]");
+    if (b) { map.closePopup(); addStop(b.dataset.add); }
   });
   function swap(a, b) {
     var o = state.order, t = o[a]; o[a] = o[b]; o[b] = t;
@@ -290,6 +395,14 @@
   });
   document.getElementById("suggest").addEventListener("click", function () {
     state.order = suggest(); render();
+  });
+
+  var appEl = document.querySelector(".app"), mapBtn = document.getElementById("maptoggle");
+  mapBtn.addEventListener("click", function () {
+    var small = appEl.classList.toggle("map-small");
+    mapBtn.textContent = small ? "Bigger map" : "Smaller map";
+    mapBtn.setAttribute("aria-pressed", String(small));
+    setTimeout(function () { map.invalidateSize(); }, 250);
   });
 
   if (!valid(state.order)) state.order = suggest();

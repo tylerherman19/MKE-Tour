@@ -51,6 +51,7 @@ button, input { font: inherit; color: inherit; }
 .app { display: grid; grid-template-columns: minmax(360px, 440px) 1fr; height: 100%; }
 .panel { overflow-y: auto; background: var(--panel); border-right: 1px solid var(--line); }
 .mapwrap { position: relative; overflow: hidden; }
+.maptoggle { display: none; position: absolute; right: 10px; bottom: 22px; z-index: 1000; min-height: 34px; padding: 4px 12px; font-size: 13px; box-shadow: 0 1px 4px rgba(0,0,0,.25); }
 #map { position: absolute; inset: 0; background: var(--bg); }
 
 .head { padding: 20px 20px 12px; display: grid; gap: 12px; }
@@ -106,11 +107,24 @@ h1 { margin: 0; font: 700 32px/1 var(--display); letter-spacing: .01em; text-tra
 .move { display: grid; gap: 4px; }
 .move button { width: 32px; height: 28px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); cursor: pointer; font-size: 13px; line-height: 1; color: var(--muted); }
 .move button:disabled { opacity: .35; cursor: default; }
+.nearwrap { padding: 8px 12px 16px; display: grid; gap: 8px; border-top: 1px solid var(--line); margin-top: 8px; }
+.nearwrap h2 { margin: 8px 8px 0; font: 700 22px/1.1 var(--display); text-transform: uppercase; letter-spacing: .02em; }
+.nearwrap .hint { margin: 0 8px; }
+.nearlist { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.near { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 10px; background: var(--chip); cursor: pointer; }
+.near .name { font-size: 15px; }
+.detour { margin: 2px 0 0; font-size: 13px; color: var(--muted); }
+.detour b { color: var(--ink); }
+.btn.add { min-height: 34px; padding: 5px 14px; border-color: var(--accent); color: var(--accent); background: var(--panel); }
+.nearlist .more, .nearlist .empty { list-style: none; padding: 4px 8px; color: var(--muted); font-size: 13px; }
+.pill.added { background: var(--link); color: var(--panel); }
 .foot { padding: 4px 20px 24px; font-size: 12px; color: var(--muted); }
 
 /* map markers */
 .mk { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--accent-ink); font: 700 16px/1 var(--display); border: 2px solid var(--panel); box-shadow: 0 1px 4px rgba(0,0,0,.35); }
 .mk.off { background: var(--panel); color: var(--off); border: 2px dashed var(--off); box-shadow: none; }
+.mk.near { width: 14px; height: 14px; border: 2px solid var(--link); background: var(--panel); box-shadow: 0 0 0 2px var(--panel); }
+.leaflet-popup-content .btn.add { margin-top: 6px; }
 .mk.hl { transform: scale(1.25); }
 .leaflet-tile-pane { filter: var(--tiles); }
 .leaflet-container { font: 13px/1.4 var(--body); }
@@ -121,12 +135,32 @@ h1 { margin: 0; font: 700 32px/1 var(--display); letter-spacing: .01em; text-tra
 
 @media (max-width: 800px) {
   .app { display: flex; flex-direction: column; height: auto; }
-  .mapwrap { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; height: 40vh; min-height: 240px; order: -1; border-bottom: 1px solid var(--line); }
+  .mapwrap { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 500; height: 36vh; min-height: 220px; order: -1; border-bottom: 1px solid var(--line); transition: height .2s; }
+  .app.map-small .mapwrap { height: 120px; min-height: 0; }
+  .maptoggle { display: inline-flex; }
   .panel { overflow: visible; border-right: 0; }
-  .head { padding: 16px 16px 10px; }
+  .head { padding: 14px 16px 10px; gap: 10px; }
+  h1 { font-size: 26px; }
+  .controls { display: grid; grid-template-columns: 1fr 1fr; }
+  .seg { grid-column: 1 / -1; }
+  .seg button { flex: 1; min-height: 40px; }
+  .field input { width: 100%; font-size: 16px; min-height: 40px; }
+  #dwell { width: 100%; }
+  .summary { grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .summary div { padding: 6px 8px; }
+  .summary dt { font-size: 10px; }
+  .summary dd { font-size: 18px; }
+  .actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .actions .primary, #apple-all { grid-column: 1 / -1; min-height: 44px; }
   .stops { padding-inline: 16px; }
+  .nearwrap { padding-inline: 16px; }
+  .nearwrap h2, .nearwrap .hint { margin-inline: 0; }
   .foot { padding-inline: 16px; }
-  h1 { font-size: 28px; }
-  .summary { grid-template-columns: repeat(2, 1fr); }
+  .row { grid-template-columns: 26px 32px 1fr auto; gap: 8px; }
+  .move button { width: 38px; height: 34px; }
+  .links { gap: 16px; font-size: 14px; }
+  .links a, .links button { padding-block: 4px; font-size: 14px; }
+  .leg a { padding-block: 4px; }
+  .btn.add { min-height: 40px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
