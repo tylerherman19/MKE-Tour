@@ -386,7 +386,7 @@
     var prog = document.getElementById("progress");
     prog.hidden = !act.length;
     prog.innerHTML = '<span class="bar"><i style="width:' + (act.length ? Math.round(seen / act.length * 100) : 0) + '%"></i></span>' +
-      '<span><b>' + seen + " of " + act.length + "</b> visited" + (seen === act.length && seen ? " · nice work!" : " · tap a number to check it off") + "</span>" +
+      '<span><b>' + seen + " of " + act.length + "</b> visited" + (seen === act.length && seen ? " · nice work!" : " · tap ✓ when you've been") + "</span>" +
       (Object.keys(state.visited).length ? '<button type="button" id="clear-visited">Clear</button>' : "");
     document.getElementById("plan-done").innerHTML = act.length ?
       "Start <b>" + fmtTime(toMin(state.start)) + "</b> · done by <b>" + fmtTime(sch.end) + "</b> · " + fmtDur(sch.walkS) + " walking" : "No open stops on " + DAY_LONG[day] + ".";
@@ -417,11 +417,11 @@
         (isExtra[id] ? '<button type="button" data-remove="' + id + '">Remove</button>' :
           h ? '<button type="button" data-skip="' + id + '">' + (state.skip[id] ? "Add back" : "Skip") + "</button>" : "") + "</div>";
       var done = !!state.visited[id];
-      var num = h || done ? '<button type="button" class="num" data-visit="' + id + '" aria-pressed="' + done + '" aria-label="' + esc(s.name) + (done ? " visited. Tap to uncheck" : ": mark as visited") + '">' + (done ? icon("check", "sm") : r ? r.n : "–") + "</button>"
-        : '<span class="num">–</span>';
+      var num = '<span class="num">' + (done ? icon("check", "sm") : r ? r.n : "–") + "</span>";
+      var box = h || done ? '<button type="button" class="checkbox" data-visit="' + id + '" aria-pressed="' + done + '" aria-label="' + (done ? "Uncheck " : "Check off ") + esc(s.name) + '">' + icon("check", "sm") + "</button>" : "<span></span>";
       return '<li class="stop' + (r ? "" : " off") + (done ? " done" : "") + (id === view.sel ? " sel" : "") + '" data-id="' + id + '">' + num +
         '<button type="button" class="card" data-open="' + id + '">' + thumb(id, "th") +
-        '<span class="txt"><span class="nm">' + esc(s.name) + "</span>" + lines.join("") + "</span></button>" +
+        '<span class="txt"><span class="nm">' + esc(s.name) + "</span>" + lines.join("") + "</span></button>" + box +
         '<span class="grip" role="img" aria-label="Drag to reorder">' + icon("grip") + "</span>" + edit + "</li>";
     }).join("");
   }
