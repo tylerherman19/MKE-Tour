@@ -12,7 +12,7 @@
 <link rel="preconnect" href="https://historicmilwaukee.org">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Inter:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<link rel="stylesheet" href="style.css?v=7">
+<link rel="stylesheet" href="style.css?v=8">
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -37,6 +37,10 @@
     <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></symbol>
     <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></symbol>
+    <symbol id="i-tram" viewBox="0 0 24 24"><rect x="5" y="6" width="14" height="12" rx="3"/><path d="M5 12h14M9 3h6M12 3v3M8 18l-2 3M16 18l2 3"/><circle cx="8.5" cy="15" r=".6"/><circle cx="15.5" cy="15" r=".6"/></symbol>
+    <symbol id="i-door" viewBox="0 0 24 24"><path d="M13 4H6v16h7M13 4l6 2v14l-6 1zM16 12.5v.01"/></symbol>
+    <symbol id="i-cup" viewBox="0 0 24 24"><path d="M4 9h13v4a6 6 0 0 1-6 6h-1a6 6 0 0 1-6-6zM17 10h1.5a2.5 2.5 0 0 1 0 5H17M8 2.5v3M12 2.5v3"/></symbol>
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 11l9-7 9 7M5 9.5V20h14V9.5M10 20v-6h4v6"/></symbol>
   </defs>
 </svg>
 
@@ -59,6 +63,7 @@
   <div class="mapbtns">
     <button type="button" class="round" id="locate" aria-label="Show my location" aria-pressed="false"><svg class="ic"><use href="#i-nav"/></svg></button>
     <button type="button" class="round" id="layers" aria-label="Show other Doors Open sites" aria-pressed="true"><svg class="ic"><use href="#i-layers"/></svg></button>
+    <button type="button" class="round hopbtn" id="hop" aria-label="Show the Hop streetcar, live" aria-pressed="true"><svg class="ic"><use href="#i-tram"/></svg></button>
     <button type="button" class="round mobile-only" id="toplan" aria-label="Open your plan"><svg class="ic"><use href="#i-list"/></svg></button>
   </div>
 
@@ -86,6 +91,7 @@
         <input type="number" id="dwell" value="30" min="5" max="180" step="5" inputmode="numeric">
       </label>
       <button type="button" class="ghostbtn" id="suggest"><svg class="ic sm" aria-hidden="true"><use href="#i-spark"/></svg>Suggest best order</button>
+      <button type="button" class="ghostbtn" id="add-break"><svg class="ic sm" aria-hidden="true"><use href="#i-cup"/></svg>Add a break</button>
     </div>
     <p class="plan-line" id="plan-done"></p>
     <div class="progress" id="progress" aria-live="polite"></div>
@@ -146,6 +152,30 @@
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+  <dialog class="brk" id="brk" aria-labelledby="brk-h">
+    <div class="brkin">
+      <h3 id="brk-h">Add a break</h3>
+      <p class="hint">Lunch, coffee, a stop at a friend's. It slots in between stops and pushes the rest of the day back.</p>
+      <div class="chips">
+        <button type="button" class="chip" data-bq="helen" aria-pressed="false"><svg class="ic xs" aria-hidden="true"><use href="#i-home"/></svg>Helen's · 740 N Plankinton</button>
+        <button type="button" class="chip" data-bq="here" aria-pressed="false"><svg class="ic xs" aria-hidden="true"><use href="#i-nav"/></svg>Where I am</button>
+        <button type="button" class="chip" data-bq="map" aria-pressed="false"><svg class="ic xs" aria-hidden="true"><use href="#i-pin"/></svg>Tap the map</button>
+      </div>
+      <div class="brksearch">
+        <label class="search"><svg class="ic sm" aria-hidden="true"><use href="#i-search"/></svg><input type="search" id="brk-q" placeholder="Restaurant or address downtown" autocomplete="off" enterkeyhint="search"></label>
+        <button type="button" class="pillbtn" id="brk-go">Search</button>
+      </div>
+      <ul class="brkres" id="brk-results"></ul>
+      <p class="brkwhere" id="brk-where"></p>
+      <div class="brkrow">
+        <label class="field">Name<input id="brk-name" value="Lunch" maxlength="40"></label>
+        <label class="field">Minutes<input type="number" id="brk-min" value="45" min="5" max="240" step="5" inputmode="numeric"></label>
+      </div>
+      <label class="field">Put it<select id="brk-after"></select></label>
+      <div class="brkacts"><button type="button" class="ghostbtn" id="brk-cancel">Cancel</button><button type="button" class="cta" id="brk-add" disabled>Add break</button></div>
+    </div>
+  </dialog>
+
   <div class="lightbox" id="lightbox" hidden>
     <button type="button" class="round lb-close" aria-label="Close photo"><svg class="ic"><use href="#i-x"/></svg></button>
     <button type="button" class="round lb-prev" aria-label="Previous photo"><svg class="ic"><use href="#i-left"/></svg></button>
@@ -157,8 +187,10 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js"></script>
-<script src="data.js?v=7"></script>
+<script src="data.js?v=8"></script>
 <script src="info.js?v=7"></script>
-<script src="app.js?v=7"></script>
+<script src="hop-data.js?v=8"></script>
+<script src="hop.js?v=8"></script>
+<script src="app.js?v=8"></script>
 </body>
 </html>
