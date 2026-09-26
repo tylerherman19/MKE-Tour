@@ -17,6 +17,7 @@
   if (!state.start) state.start = "10:00";
   if (!state.dwell) state.dwell = 30;
   if (!state.skip) state.skip = {};
+  if (!state.visited) state.visited = {};
   if (state.others == null) state.others = true;
 
   function valid(order) {
@@ -302,12 +303,13 @@
     }
     state.order.forEach(function (id) {
       var s = byId[id], r = rowBy[id], i = INFO[id], sel = id === view.sel;
-      var html = '<div class="pin' + (r ? "" : " off") + (sel ? " sel" : "") + '"><span class="pimg">' +
-        (i ? '<img src="' + esc(i.thumb) + '" alt="">' : "") + "</span>" + (r ? '<span class="pn">' + r.n + "</span>" : "") + "</div>";
+      var done = !!state.visited[id];
+      var html = '<div class="pin' + (r ? "" : " off") + (sel ? " sel" : "") + (done ? " done" : "") + '"><span class="pimg">' +
+        (i ? '<img src="' + esc(i.thumb) + '" alt="">' : "") + "</span>" + (r || done ? '<span class="pn">' + (done ? "✓" : r.n) + "</span>" : "") + "</div>";
       var size = r ? 50 : 36;
       var m = L.marker([s.lat, s.lng], {
         icon: L.divIcon({ className: "", html: html, iconSize: [size, size + 8], iconAnchor: [size / 2, size + 8] }),
-        zIndexOffset: sel ? 2000 : r ? 1000 - r.n : 0, title: s.full, alt: s.full
+        zIndexOffset: sel ? 2000 : r ? 1000 - r.n : 0, title: s.full + (done ? " (visited)" : ""), alt: s.full
       });
       m.on("click", function () { select(id); });
       m.addTo(markerLayer); markers[id] = m;
@@ -379,7 +381,13 @@
   function renderPlan() {
     var day = state.day, act = view.act, sch = view.sch, rowBy = view.rowBy, dwell = +state.dwell;
     var total = act.length ? (sch.end - toMin(state.start)) * 60 : 0;
+    var seen = act.filter(function (id) { return state.visited[id]; }).length;
     document.getElementById("plan-sub").textContent = act.length + " stop" + (act.length === 1 ? "" : "s") + " · " + fmtMi(sch.walkM) + " · ~" + fmtDur(total);
+    var prog = document.getElementById("progress");
+    prog.hidden = !act.length;
+    prog.innerHTML = '<span class="bar"><i style="width:' + (act.length ? Math.round(seen / act.length * 100) : 0) + '%"></i></span>' +
+      '<span><b>' + seen + " of " + act.length + "</b> visited" + (seen === act.length && seen ? " · nice work!" : " · tap a number to check it off") + "</span>" +
+      (Object.keys(state.visited).length ? '<button type="button" id="clear-visited">Clear</button>' : "");
     document.getElementById("plan-done").innerHTML = act.length ?
       "Start <b>" + fmtTime(toMin(state.start)) + "</b> · done by <b>" + fmtTime(sch.end) + "</b> · " + fmtDur(sch.walkS) + " walking" : "No open stops on " + DAY_LONG[day] + ".";
     document.getElementById("apple-all").href = appleRoute(act, false);
@@ -399,6 +407,7 @@
       else if (r) lines.push('<p class="ln">' + icon("pin", "xs") + "First stop" + "</p>");
       else lines.push('<p class="ln">' + icon("pin", "xs") + esc(s.addr) + "</p>");
       lines.push('<p class="ln">' + statusHtml(s, day) + (r ? '<span class="arr">Arrive ' + fmtTime(r.arrive) + "</span>" : "") + "</p>");
+      if (state.visited[id]) lines.push('<p class="flag ok">' + icon("check", "xs") + "Visited</p>");
       if (h && state.skip[id]) lines.push('<p class="flag">Skipped</p>');
       if (r && r.wait > 0) lines.push('<p class="flag warn">Opens ' + fmtHour(h[0]) + ", about " + Math.round(r.wait) + " min wait</p>");
       if (r && r.lateBy > 0) lines.push('<p class="flag bad">' + (r.lateBy >= dwell ? "Closed by the time you arrive" : "Only " + Math.max(0, Math.round(dwell - r.lateBy)) + " min before close") + "</p>");
@@ -407,8 +416,10 @@
         '<button type="button" data-down="' + idx + '"' + (idx === state.order.length - 1 ? " disabled" : "") + ' aria-label="Move ' + esc(s.name) + ' later">' + icon("down", "sm") + "</button>" +
         (isExtra[id] ? '<button type="button" data-remove="' + id + '">Remove</button>' :
           h ? '<button type="button" data-skip="' + id + '">' + (state.skip[id] ? "Add back" : "Skip") + "</button>" : "") + "</div>";
-      return '<li class="stop' + (r ? "" : " off") + (id === view.sel ? " sel" : "") + '" data-id="' + id + '">' +
-        '<span class="num">' + (r ? r.n : "–") + "</span>" +
+      var done = !!state.visited[id];
+      var num = h || done ? '<button type="button" class="num" data-visit="' + id + '" aria-pressed="' + done + '" aria-label="' + esc(s.name) + (done ? " visited. Tap to uncheck" : ": mark as visited") + '">' + (done ? icon("check", "sm") : r ? r.n : "–") + "</button>"
+        : '<span class="num">–</span>';
+      return '<li class="stop' + (r ? "" : " off") + (done ? " done" : "") + (id === view.sel ? " sel" : "") + '" data-id="' + id + '">' + num +
         '<button type="button" class="card" data-open="' + id + '">' + thumb(id, "th") +
         '<span class="txt"><span class="nm">' + esc(s.name) + "</span>" + lines.join("") + "</span></button>" +
         '<span class="grip" role="img" aria-label="Drag to reorder">' + icon("grip") + "</span>" + edit + "</li>";
@@ -458,7 +469,7 @@
     document.getElementById("list-sub").textContent = list.length + " of " + ALL.length + " downtown Doors Open sites";
     sitesEl.innerHTML = list.length ? list.map(function (s) {
       var r = view.rowBy[s.id], p = inPlan(s.id);
-      var btn = p ? (r ? '<span class="stopno" aria-label="Stop ' + r.n + '">' + r.n + "</span>" : '<span class="stopno off" aria-label="In your plan, not on route">' + icon("check", "xs") + "</span>")
+      var btn = state.visited[s.id] ? '<span class="stopno ok" aria-label="Visited">' + icon("check", "xs") + "</span>" : p ? (r ? '<span class="stopno" aria-label="Stop ' + r.n + '">' + r.n + "</span>" : '<span class="stopno off" aria-label="In your plan, not on route">' + icon("check", "xs") + "</span>")
         : '<button type="button" class="addbtn round-add" data-add="' + s.id + '" aria-label="Add ' + esc(s.name) + ' to your plan">' + icon("plus", "sm") + "</button>";
       return '<li class="site"><button type="button" class="card" data-open="' + s.id + '">' + thumb(s.id, "th sm") +
         '<span class="txt"><span class="nm">' + esc(s.full) + '</span><span class="ln">' + esc(s.addr) + "</span>" +
@@ -469,11 +480,8 @@
   function nextId() {
     var rows = view.sch.rows;
     if (!rows.length) return state.order[0];
-    if (todayKey() === state.day) {
-      var n = nowMin();
-      for (var i = 0; i < rows.length; i++) if (rows[i].leave > n) return rows[i].id;
-    }
-    return rows[0].id;
+    for (var i = 0; i < rows.length; i++) if (!state.visited[rows[i].id]) return rows[i].id;
+    return rows[rows.length - 1].id;
   }
   function eyebrow(id) {
     var s = byId[id], r = view.rowBy[id];
@@ -487,10 +495,14 @@
     if (!id) { peekEl.innerHTML = ""; return; }
     var s = byId[id], r = view.rowBy[id], away = minAway(s);
     var kick = away != null ? "~" + away + " min away" : r ? eyebrow(id) + " · arrive " + fmtTime(r.arrive) : eyebrow(id);
-    if (!view.sel && r && todayKey() === state.day && away == null) kick = "Up next · arrive " + fmtTime(r.arrive);
-    peekEl.innerHTML = '<div class="grab" aria-hidden="true"></div><button type="button" class="card" data-open="' + id + '">' + thumb(id, "pth") +
+    var done = !!state.visited[id];
+    if (!view.sel && r && !done && away == null) kick = "Up next · arrive " + fmtTime(r.arrive);
+    if (done) kick = "Visited" + (away != null ? " · ~" + away + " min away" : "");
+    peekEl.innerHTML = '<div class="grab" aria-hidden="true"></div><div class="prow"><button type="button" class="card" data-open="' + id + '">' + thumb(id, "pth") +
       '<span class="txt"><span class="kick">' + esc(kick) + '</span><span class="nm">' + esc(s.name) + "</span>" +
-      '<span class="ln">' + statusHtml(s, state.day) + '</span></span><span class="chev">' + icon("right") + "</span></button>";
+      '<span class="ln">' + statusHtml(s, state.day) + "</span></span></button>" +
+      (s[state.day] || done ? '<button type="button" class="chev check" data-visit="' + id + '" aria-pressed="' + done + '" aria-label="' + (done ? "Uncheck " : "Check off ") + esc(s.name) + '">' + icon("check") + "</button>" : "") +
+      '<button type="button" class="chev" data-open="' + id + '" aria-label="Open ' + esc(s.name) + '">' + icon("right") + "</button></div>";
   }
 
   function renderDetail() {
@@ -546,7 +558,9 @@
       '<button type="button" data-showmap="' + id + '">Show on map</button></div></div>' +
       '<div class="herotext"><p class="eyebrow">' + esc(eyebrow(id)) + '</p><h2 id="d-name">' + esc(s.full) + "</h2>" +
       '<p class="hl">' + icon("pin", "sm") + esc(s.addr) + "</p><p class=\"hl\">" + statusHtml(s, day) +
-      (r ? '<span class="arr">Arrive ' + fmtTime(r.arrive) + "</span>" : "") + "</p></div></div>" +
+      (r ? '<span class="arr">Arrive ' + fmtTime(r.arrive) + "</span>" : "") + "</p>" +
+      (s[day] || state.visited[id] ? '<button type="button" class="visitbtn" data-visit="' + id + '" aria-pressed="' + !!state.visited[id] + '">' + icon("check", "sm") +
+        (state.visited[id] ? "Visited · tap to undo" : "Mark as visited") + "</button>" : "") + "</div></div>" +
       '<div class="tabs" role="tablist">' +
       ["overview", "photos", "info"].map(function (t) {
         var lab = { overview: "Overview", photos: "Photos" + (photos.length ? " (" + photos.length + ")" : ""), info: "Visit Info" }[t];
@@ -641,6 +655,8 @@
     var d = b.dataset;
     if (d.open) { go("stop/" + d.open); return; }
     if (d.add) { addStop(d.add); return; }
+    if (d.visit) { toggleVisited(d.visit); return; }
+    if (b.id === "clear-visited") { if (confirm("Clear all check-offs?")) { state.visited = {}; render(); } return; }
     if (d.showmap) { showOnMap(d.showmap); return; }
     if (d.photo != null) { openPhoto(+d.photo); return; }
     if (d.up != null) { swap(+d.up, +d.up - 1); return; }
@@ -672,6 +688,12 @@
       m.hidden = true; document.getElementById("d-more").setAttribute("aria-expanded", "false");
     }
   });
+  function toggleVisited(id) {
+    if (state.visited[id]) delete state.visited[id]; else state.visited[id] = Date.now();
+    // After checking off the card's stop, let it move on to the next one.
+    if (state.visited[id] && view.sel === id && view.v !== "stop") view.sel = null;
+    render();
+  }
   function swap(a, b) {
     var o = state.order, t = o[a]; o[a] = o[b]; o[b] = t;
     render();
