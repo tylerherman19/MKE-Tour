@@ -12,7 +12,7 @@
 <link rel="preconnect" href="https://historicmilwaukee.org">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Inter:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<link rel="stylesheet" href="style.css?v=6">
+<link rel="stylesheet" href="style.css?v=7">
 </head>
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -34,6 +34,7 @@
     <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></symbol>
     <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></symbol>
     <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></symbol>
   </defs>
@@ -121,13 +122,29 @@
     <ul class="sitelist" id="sites"></ul>
   </section>
 
+  <section class="sheet" id="history-view" aria-labelledby="hist-h">
+    <button type="button" class="grabbtn mobile-only" aria-label="Close and show the map"><span class="grab"></span></button>
+    <header class="sheethead">
+      <div>
+        <h2 id="hist-h">History</h2>
+        <p class="sub" id="hist-sub"></p>
+      </div>
+      <button type="button" class="pillbtn" id="hist-copy">Copy log</button>
+    </header>
+    <div class="trackcard" id="trackcard"></div>
+    <div class="hlist" id="hlist"></div>
+  </section>
+
   <article class="detail" id="detail" aria-labelledby="d-name"></article>
 
   <nav class="tabbar" aria-label="Views">
     <a href="#map" data-tab="map" class="mobile-only"><svg class="ic"><use href="#i-map"/></svg>Map</a>
     <a href="#list" data-tab="list"><svg class="ic"><use href="#i-list"/></svg>List</a>
     <a href="#plan" data-tab="plan"><svg class="ic"><use href="#i-bookmark"/></svg>My Plan</a>
+    <a href="#history" data-tab="history"><svg class="ic"><use href="#i-clock"/></svg>History</a>
   </nav>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
   <div class="lightbox" id="lightbox" hidden>
     <button type="button" class="round lb-close" aria-label="Close photo"><svg class="ic"><use href="#i-x"/></svg></button>
@@ -140,8 +157,8 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js"></script>
-<script src="data.js?v=6"></script>
-<script src="info.js?v=6"></script>
-<script src="app.js?v=6"></script>
+<script src="data.js?v=7"></script>
+<script src="info.js?v=7"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>

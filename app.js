@@ -18,6 +18,7 @@
   if (!state.dwell) state.dwell = 30;
   if (!state.skip) state.skip = {};
   if (!state.visited) state.visited = {};
+  if (!Array.isArray(state.log)) state.log = [];
   if (state.others == null) state.others = true;
 
   function valid(order) {
@@ -316,32 +317,131 @@
     });
   }
 
-  // Live location
-  var me = null, watchId = null, meMarker = null, meCircle = null, firstFix = false;
+  // Live location. One watch serves the blue dot, "min away" and auto check-in.
+  var me = null, fix = null, watchId = null, meMarker = null, meCircle = null, firstFix = false, locMsg = "";
   var locBtn = document.getElementById("locate");
   locBtn.addEventListener("click", function () {
-    if (watchId != null) {
-      if (me) { map.setView(me, Math.max(map.getZoom(), 16)); return; }
-    }
-    if (!navigator.geolocation) { locBtn.disabled = true; return; }
-    locBtn.classList.add("busy");
+    if (me) { map.setView(me, Math.max(map.getZoom(), 16)); return; }
     firstFix = true;
-    if (watchId == null) watchId = navigator.geolocation.watchPosition(function (p) {
-      me = [p.coords.latitude, p.coords.longitude];
-      locBtn.classList.remove("busy"); locBtn.setAttribute("aria-pressed", "true");
-      if (!meMarker) {
-        meCircle = L.circle(me, { radius: p.coords.accuracy, color: "#2f7ff5", weight: 1, fillOpacity: 0.1, interactive: false }).addTo(meLayer);
-        meMarker = L.marker(me, { icon: L.divIcon({ className: "", html: '<div class="me"></div>', iconSize: [22, 22], iconAnchor: [11, 11] }), zIndexOffset: 3000, title: "You are here", keyboard: false }).addTo(meLayer);
-      } else { meMarker.setLatLng(me); meCircle.setLatLng(me).setRadius(p.coords.accuracy); }
-      if (firstFix) { firstFix = false; map.setView(me, Math.max(map.getZoom(), 16)); }
-      renderPeek();
-    }, function () {
-      locBtn.classList.remove("busy");
-      navigator.geolocation.clearWatch(watchId); watchId = null;
-      locBtn.setAttribute("aria-pressed", "false");
-      locBtn.title = "Location unavailable";
-    }, { enableHighAccuracy: true, maximumAge: 15000 });
+    startLocation();
   });
+  function startLocation() {
+    if (watchId != null) return;
+    if (!navigator.geolocation) { locMsg = "Location isn't available in this browser."; renderHistory(); return; }
+    locBtn.classList.add("busy");
+    locMsg = "Finding you…";
+    watchId = navigator.geolocation.watchPosition(onFix, function (e) {
+      locBtn.classList.remove("busy");
+      // Only a denied permission ends the watch; a timeout or lost signal keeps it
+      // running so tracking resumes by itself when the phone gets a fix again.
+      if (e.code === 1) {
+        navigator.geolocation.clearWatch(watchId); watchId = null;
+        locBtn.setAttribute("aria-pressed", "false");
+        locBtn.title = "Location unavailable";
+        locMsg = "Location permission is off. Allow location for this site in your browser settings, then turn auto check-in on again.";
+      } else if (!fix) locMsg = "Still looking for a GPS signal…";
+      renderHistory();
+    }, { enableHighAccuracy: true, maximumAge: 10000 });
+  }
+  function stopLocation() {
+    if (watchId != null) navigator.geolocation.clearWatch(watchId);
+    watchId = null; me = null; fix = null; meLayer.clearLayers(); meMarker = meCircle = null;
+    locBtn.setAttribute("aria-pressed", "false");
+    renderPeek();
+  }
+  function onFix(p) {
+    me = [p.coords.latitude, p.coords.longitude];
+    fix = { ll: me, acc: p.coords.accuracy, t: Date.now() };
+    locMsg = "";
+    locBtn.classList.remove("busy"); locBtn.setAttribute("aria-pressed", "true");
+    if (!meMarker) {
+      meCircle = L.circle(me, { radius: p.coords.accuracy, color: "#2f7ff5", weight: 1, fillOpacity: 0.1, interactive: false }).addTo(meLayer);
+      meMarker = L.marker(me, { icon: L.divIcon({ className: "", html: '<div class="me"></div>', iconSize: [22, 22], iconAnchor: [11, 11] }), zIndexOffset: 3000, title: "You are here", keyboard: false }).addTo(meLayer);
+    } else { meMarker.setLatLng(me); meCircle.setLatLng(me).setRadius(p.coords.accuracy); }
+    if (firstFix) { firstFix = false; map.setView(me, Math.max(map.getZoom(), 16)); }
+    checkPresence();
+    renderPeek();
+    if (view.v === "history") renderHistory();
+  }
+
+  // ---------- auto check-in ----------
+  // Arrive: within ~55-90 m of a site (more slack for a fuzzier fix) for 90 s, so
+  // walking past doesn't count. Leave: over 110 m away (or clearly at another site)
+  // for 60 s. Fixes worse than 100 m (common indoors) are ignored, so a weak signal
+  // inside a building never checks you out.
+  var ENTER = 55, EXIT = 110, DWELL = 90e3, LEAVE = 60e3;
+  var cand = null, leaving = null;
+  function openVisit() {
+    for (var i = state.log.length - 1; i >= 0; i--) if (!state.log[i].leave) return state.log[i];
+    return null;
+  }
+  function nearestSite(ll) {
+    var best = null;
+    ALL.forEach(function (s) {
+      var d = metersBetween(ll, [s.lat, s.lng]);
+      if (!best || d < best.d) best = { id: s.id, d: d };
+    });
+    return best;
+  }
+  function checkPresence() {
+    if (!state.track || !fix || Date.now() - fix.t > 5 * 60e3 || fix.acc > 100) return;
+    var now = Date.now(), open = openVisit();
+    var near = nearestSite(fix.ll), nearOk = near && fix.acc <= 80 && near.d <= ENTER + Math.min(fix.acc, 35);
+    if (open) {
+      var o = byId[open.id], dOpen = metersBetween(fix.ll, [o.lat, o.lng]);
+      var elsewhere = nearOk && near.id !== open.id && near.d < dOpen - 25;
+      if (dOpen > EXIT || elsewhere) {
+        if (!leaving || leaving.id !== open.id) leaving = { id: open.id, since: now };
+        else if (now - leaving.since >= LEAVE) { endVisit(open, leaving.since, "auto"); open = null; leaving = null; }
+      } else { leaving = null; cand = null; return; }
+    }
+    if (!nearOk || (open && near.id === open.id)) { cand = null; return; }
+    if (!cand || cand.id !== near.id) { cand = { id: near.id, since: now }; return; }
+    if (now - cand.since >= DWELL) {
+      if (open) endVisit(open, leaving ? leaving.since : cand.since, "auto");
+      leaving = null;
+      startVisit(near.id, cand.since, "auto");
+      cand = null;
+      render();
+    }
+  }
+  function startVisit(id, t, how) {
+    state.log.push({ id: id, arrive: t, leave: null, how: how });
+    if (!state.visited[id]) state.visited[id] = t;
+    toast((how === "auto" ? "Checked in at " : "Arrived at ") + byId[id].name + " · " + clock(t));
+    save();
+  }
+  function endVisit(v, t, how) {
+    v.leave = Math.max(t, v.arrive);
+    v.leaveHow = how;
+    toast("Left " + byId[v.id].name + " after " + fmtSpan(v.leave - v.arrive));
+    save();
+    if (view.v === "history") renderHistory();
+  }
+  function clock(t) { var d = new Date(t); return fmtTime(d.getHours() * 60 + d.getMinutes()); }
+  function fmtSpan(ms) { return fmtDur(Math.max(60, Math.round(ms / 1000))); }
+  var toastEl = document.getElementById("toast"), toastTimer = null;
+  function toast(msg) {
+    toastEl.textContent = msg; toastEl.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toastEl.classList.remove("show"); }, 4000);
+  }
+
+  // Screen wake lock, so the page (and location) keeps running while you walk.
+  var wakeLock = null;
+  function syncWake() {
+    if (!("wakeLock" in navigator)) return;
+    if (state.wake && document.visibilityState === "visible" && !wakeLock) {
+      navigator.wakeLock.request("screen").then(function (l) {
+        wakeLock = l; l.addEventListener("release", function () { wakeLock = null; });
+      }).catch(function () {});
+    } else if (!state.wake && wakeLock) { wakeLock.release(); wakeLock = null; }
+  }
+  document.addEventListener("visibilitychange", function () {
+    syncWake();
+    if (document.visibilityState === "visible") { checkPresence(); render(); }
+  });
+
   function minAway(s) {
     if (!me) return null;
     return Math.max(1, Math.round(metersBetween(me, [s.lat, s.lng]) * 1.25 / WALK_MPS / 60));
@@ -498,6 +598,8 @@
     var kick = eyebrow(id);
     if (r && !done && id === nextId()) kick = "Up next · " + kick;
     if (done) kick = "Visited · " + kick;
+    var here = openVisit();
+    if (here && here.id === id) kick = "Here now · " + fmtSpan(Date.now() - here.arrive);
     var sub = away != null ? "~" + away + " min away" : r ? "Arrive " + fmtTime(r.arrive) : "";
     return '<div class="pslide" data-id="' + id + '"><button type="button" class="card" data-open="' + id + '">' + thumb(id, "pth") +
       '<span class="txt"><span class="kick">' + esc(kick) + '</span><span class="nm">' + esc(s.name) + "</span>" +
@@ -506,7 +608,8 @@
   }
   function renderPeek() {
     if (peekBusy) return;
-    var cur = view.sel && byId[view.sel] ? view.sel : nextId();
+    var here = openVisit();
+    var cur = view.sel && byId[view.sel] ? view.sel : here ? here.id : nextId();
     var ids = view.sch.rows.map(function (r) { return r.id; });
     if (cur && ids.indexOf(cur) < 0) ids.unshift(cur);
     if (!ids.length) { peekEl.innerHTML = ""; peekIds = []; return; }
@@ -538,6 +641,74 @@
       // Keep the stop visible above the card.
       map.panInside([st.lat, st.lng], { paddingTopLeft: [40, 190], paddingBottomRight: [40, peekEl.offsetHeight + 90] });
     }, 90);
+  }
+
+  function renderHistory() {
+    var card = document.getElementById("trackcard"), list = document.getElementById("hlist");
+    var log = state.log, now = Date.now(), open = openVisit();
+    var inside = 0, walk = 0;
+    log.forEach(function (v, k) {
+      inside += (v.leave || now) - v.arrive;
+      var nx = log[k + 1];
+      if (v.leave && nx && nx.arrive > v.leave) walk += nx.arrive - v.leave;
+    });
+    document.getElementById("hist-sub").textContent = log.length ?
+      log.length + " visit" + (log.length === 1 ? "" : "s") + " · " + fmtSpan(inside) + " inside" + (walk ? " · " + fmtSpan(walk) + " between" : "") : "Your visits will show up here.";
+    document.getElementById("hist-copy").hidden = !log.length;
+
+    var status;
+    if (!state.track) status = "Off. Turn on to check in automatically when you arrive somewhere.";
+    else if (locMsg) status = locMsg;
+    else if (!fix) status = "Waiting for your location…";
+    else {
+      status = "On · GPS ±" + Math.round(fix.acc) + " m";
+      if (fix.acc > 100) status += " · signal too weak to check in or out";
+      else if (open) status += " · at " + byId[open.id].name + (leaving ? " (looks like you're leaving)" : "");
+      else if (cand) status += " · near " + byId[cand.id].name + ", checking in after " + Math.max(1, Math.ceil((DWELL - (now - cand.since)) / 60e3)) + " more min";
+      else { var n = nearestSite(fix.ll); status += " · nearest site " + byId[n.id].name + " (" + Math.round(n.d) + " m)"; }
+    }
+    card.innerHTML =
+      '<div class="trow"><span><b>Auto check-in</b><span class="tstat">' + esc(status) + "</span></span>" +
+      '<button type="button" class="switch" id="auto-toggle" role="switch" aria-checked="' + !!state.track + '" aria-label="Auto check-in"><i></i></button></div>' +
+      ("wakeLock" in navigator ? '<div class="trow"><span><b>Keep screen on</b><span class="tstat">Stops the phone from locking and pausing location.</span></span>' +
+        '<button type="button" class="switch" id="wake-toggle" role="switch" aria-checked="' + !!state.wake + '" aria-label="Keep screen on"><i></i></button></div>' : "") +
+      '<p class="tnote">Works while this page is open. Phones pause location for web pages in the background or when the screen locks.</p>';
+
+    if (!log.length) { list.innerHTML = '<p class="empty">No visits yet. Turn on auto check-in, or tap ✓ on a stop when you get there.</p>'; return; }
+    var html = "", lastDay = "";
+    log.forEach(function (v, k) {
+      var d = new Date(v.arrive), day = d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+      if (day !== lastDay) { html += '<h3 class="hday">' + esc(day) + "</h3>"; lastDay = day; }
+      var prev = log[k - 1];
+      if (prev && prev.leave && v.arrive > prev.leave && new Date(prev.leave).toDateString() === d.toDateString())
+        html += '<p class="hgap">' + icon("walk", "xs") + fmtSpan(v.arrive - prev.leave) + " between stops</p>";
+      var s = byId[v.id], isOpen = !v.leave, dur = (v.leave || now) - v.arrive;
+      var times = clock(v.arrive) + " → " + (isOpen ? "now" : clock(v.leave));
+      var edit = view.editVisit === k;
+      html += '<div class="hitem' + (isOpen ? " open" : "") + '">' +
+        '<button type="button" class="card" data-open="' + v.id + '">' + thumb(v.id, "th sm") +
+        '<span class="txt"><span class="nm">' + esc(s.name) + "</span>" +
+        '<span class="ln htimes">' + times + "</span>" +
+        '<span class="ln">' + (isOpen ? '<span class="here">Here now</span>' : "") + (v.how === "auto" ? "Auto check-in" : "Checked in by hand") +
+        (v.leaveHow === "auto" ? " · left automatically" : "") + "</span></span></button>" +
+        '<span class="hdur">' + fmtSpan(dur) + "</span>" +
+        '<div class="hacts">' + (isOpen ? '<button type="button" data-leave="' + k + '">I left</button>' : "") +
+        '<button type="button" data-editv="' + k + '">' + (edit ? "Done" : "Edit times") + "</button></div>" +
+        (edit ? '<div class="hedit"><label>Arrived<input type="time" data-f="arrive" data-i="' + k + '" value="' + hhmm(v.arrive) + '"></label>' +
+          '<label>Left<input type="time" data-f="leave" data-i="' + k + '" value="' + (v.leave ? hhmm(v.leave) : "") + '"></label>' +
+          '<button type="button" class="del" data-delv="' + k + '">Delete visit</button></div>' : "") + "</div>";
+    });
+    list.innerHTML = html;
+  }
+  function hhmm(t) { var d = new Date(t); return (d.getHours() < 10 ? "0" : "") + d.getHours() + ":" + (d.getMinutes() < 10 ? "0" : "") + d.getMinutes(); }
+  function logText() {
+    var lastDay = "";
+    return "Doors Open MKE visits\n" + state.log.map(function (v) {
+      var day = new Date(v.arrive).toLocaleDateString(undefined, { weekday: "short", month: "numeric", day: "numeric" });
+      var head = day !== lastDay ? "\n" + day + "\n" : "";
+      lastDay = day;
+      return head + clock(v.arrive) + " – " + (v.leave ? clock(v.leave) : "now") + " (" + fmtSpan((v.leave || Date.now()) - v.arrive) + ")  " + byId[v.id].full;
+    }).join("\n");
   }
 
   function renderDetail() {
@@ -617,7 +788,7 @@
       v = "stop";
       if (view.detail !== h.slice(5)) { view.detail = h.slice(5); view.tab = "overview"; }
       view.sel = view.detail;
-    } else if (h === "plan" || h === "list" || h === "map") v = h;
+    } else if (h === "plan" || h === "list" || h === "map" || h === "history") v = h;
     else v = desktop.matches ? "plan" : "map";
     if (v === "map" && desktop.matches) v = "plan";
     if (v !== "stop") lastMain = v;
@@ -628,6 +799,7 @@
       if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
     });
     if (v === "stop") { renderDetail(); detailEl.scrollTop = 0; }
+    if (v === "history") renderHistory();
     renderPeek(); drawMap();
     setTimeout(function () { map.invalidateSize(); }, 50);
   }
@@ -717,6 +889,25 @@
     }
     if (b.id === "toplan") { go("plan"); return; }
     if (b.id === "edit") { view.edit = !view.edit; renderPlan(); return; }
+    if (b.id === "auto-toggle") {
+      state.track = !state.track; save();
+      if (state.track) { startLocation(); if (!state.wake && "wakeLock" in navigator) { state.wake = true; syncWake(); } }
+      else { cand = leaving = null; stopLocation(); }
+      renderHistory(); return;
+    }
+    if (b.id === "wake-toggle") { state.wake = !state.wake; save(); syncWake(); renderHistory(); return; }
+    if (d.leave != null) { var lv = state.log[+d.leave]; if (lv && !lv.leave) { endVisit(lv, Date.now(), "manual"); render(); } return; }
+    if (d.editv != null) { view.editVisit = view.editVisit === +d.editv ? null : +d.editv; renderHistory(); return; }
+    if (d.delv != null) {
+      if (confirm("Delete this visit from your history?")) { state.log.splice(+d.delv, 1); view.editVisit = null; save(); render(); renderHistory(); }
+      return;
+    }
+    if (b.id === "hist-copy") {
+      var text = logText();
+      if (navigator.share) navigator.share({ title: "Doors Open MKE visits", text: text }).catch(function () {});
+      else if (navigator.clipboard) navigator.clipboard.writeText(text).then(function () { toast("Log copied"); }, function () { toast("Couldn't copy"); });
+      return;
+    }
   });
   document.addEventListener("click", function (e) {
     var m = document.getElementById("d-menu");
@@ -725,7 +916,18 @@
     }
   });
   function toggleVisited(id) {
-    if (state.visited[id]) delete state.visited[id]; else state.visited[id] = Date.now();
+    var now = Date.now(), open = openVisit();
+    if (state.visited[id]) {
+      delete state.visited[id];
+      // Undo a check-in that was just made by mistake.
+      if (open && open.id === id && open.how === "manual" && now - open.arrive < 5 * 60e3) state.log.splice(state.log.indexOf(open), 1);
+    } else {
+      state.visited[id] = now;
+      if (!open || open.id !== id) {
+        if (open) endVisit(open, now, "manual");
+        startVisit(id, now, "manual");
+      }
+    }
     // After checking off the card's stop, let it move on to the next one.
     if (state.visited[id] && view.sel === id && view.v !== "stop") view.sel = null;
     render();
@@ -757,6 +959,19 @@
     dwellEl.value = v; state.dwell = v; render();
   });
   document.getElementById("suggest").addEventListener("click", function () { state.order = suggest(); render(); });
+  document.getElementById("hlist").addEventListener("change", function (e) {
+    var t = e.target, v = state.log[+t.dataset.i];
+    if (!v || !t.dataset.f) return;
+    if (!t.value) { if (t.dataset.f === "leave") v.leave = null; }
+    else {
+      var p = t.value.split(":"), base = new Date(v.arrive);
+      base.setHours(+p[0], +p[1], 0, 0);
+      var ms = base.getTime();
+      if (t.dataset.f === "arrive") { v.arrive = ms; if (v.leave && v.leave < ms) v.leave = ms; }
+      else v.leave = Math.max(ms, v.arrive);
+    }
+    save(); renderHistory(); renderPeek();
+  });
   document.getElementById("q").addEventListener("input", function (e) { view.q = e.target.value; renderList(); });
   window.addEventListener("resize", function () { map.invalidateSize(); });
 
@@ -807,6 +1022,13 @@
 
   // Keep "open now" and the up-next card current during the event.
   setInterval(function () { if (!dragging && todayKey()) render(); }, 60000);
+  // Re-check presence between fixes: a phone standing still indoors may not report new positions.
+  setInterval(function () {
+    checkPresence();
+    if (view.v === "history") renderHistory();
+  }, 20000);
+  if (state.track) startLocation();
+  syncWake();
 
   if (!valid(state.order)) state.order = suggest();
   render();
