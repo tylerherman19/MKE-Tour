@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Doors Open Route</title>
+<meta name="description" content="Walking route planner for 11 Doors Open Milwaukee 2026 stops.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Source+Sans+3:wght@400;600;700&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="panel">
+    <header class="head">
+      <p class="eyebrow">Doors Open Milwaukee · Sep 26–27, 2026</p>
+      <h1>Downtown walking route</h1>
+      <div class="controls">
+        <div class="seg" role="radiogroup" aria-label="Day">
+          <button type="button" id="day-sat" role="radio" data-day="sat">Sat 9/26</button>
+          <button type="button" id="day-sun" role="radio" data-day="sun">Sun 9/27</button>
+        </div>
+        <label class="field">Start
+          <input type="time" id="start" value="10:00" step="300">
+        </label>
+        <label class="field">Min per stop
+          <input type="number" id="dwell" value="30" min="5" max="120" step="5" inputmode="numeric">
+        </label>
+      </div>
+      <dl class="summary" id="summary"></dl>
+      <div class="actions">
+        <button type="button" class="btn primary" id="suggest">Suggest best order</button>
+        <a class="btn" id="apple-all" target="_blank" rel="noopener">Open route in Apple Maps</a>
+        <a class="btn ghost" id="apple-here" target="_blank" rel="noopener">From my location</a>
+        <a class="btn ghost" id="google-all" target="_blank" rel="noopener">Google Maps</a>
+      </div>
+      <p class="hint">Drag <span class="grip-inline" aria-hidden="true"></span> or use the arrows to reorder. Stops closed on the selected day stay in the list but are left off the route.</p>
+    </header>
+    <ol class="stops" id="stops"></ol>
+    <footer class="foot">
+      Hours from the Historic Milwaukee 9/24/26 printable site list. Walk times are estimates at about 2.8 mph from OpenStreetMap routing. Check <a href="https://historicmilwaukee.org/doors-open/buildings/" target="_blank" rel="noopener">historicmilwaukee.org</a> for last-minute changes.
+    </footer>
+  </aside>
+  <main class="mapwrap"><div id="map" aria-label="Map of route"></div></main>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js"></script>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
