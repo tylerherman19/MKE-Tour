@@ -490,19 +490,54 @@
     if (!s[state.day]) return "Closed " + DAY_LABEL[state.day];
     return "Skipped";
   }
-  function renderPeek() {
-    var id = view.sel && byId[view.sel] ? view.sel : nextId();
-    if (!id) { peekEl.innerHTML = ""; return; }
-    var s = byId[id], r = view.rowBy[id], away = minAway(s);
-    var kick = away != null ? "~" + away + " min away" : r ? eyebrow(id) + " · arrive " + fmtTime(r.arrive) : eyebrow(id);
-    var done = !!state.visited[id];
-    if (!view.sel && r && !done && away == null) kick = "Up next · arrive " + fmtTime(r.arrive);
-    if (done) kick = "Visited" + (away != null ? " · ~" + away + " min away" : "");
-    peekEl.innerHTML = '<div class="grab" aria-hidden="true"></div><div class="prow"><button type="button" class="card" data-open="' + id + '">' + thumb(id, "pth") +
+  // Bottom card: a swipeable row of the route's stops (plus a tapped nearby site),
+  // opened on the selected stop or the next one not yet visited.
+  var peekIds = [], peekIdx = 0, peekBusy = false, peekTimer = null;
+  function peekSlide(id) {
+    var s = byId[id], r = view.rowBy[id], away = minAway(s), done = !!state.visited[id];
+    var kick = eyebrow(id);
+    if (r && !done && id === nextId()) kick = "Up next · " + kick;
+    if (done) kick = "Visited · " + kick;
+    var sub = away != null ? "~" + away + " min away" : r ? "Arrive " + fmtTime(r.arrive) : "";
+    return '<div class="pslide" data-id="' + id + '"><button type="button" class="card" data-open="' + id + '">' + thumb(id, "pth") +
       '<span class="txt"><span class="kick">' + esc(kick) + '</span><span class="nm">' + esc(s.name) + "</span>" +
-      '<span class="ln">' + statusHtml(s, state.day) + "</span></span></button>" +
-      (s[state.day] || done ? '<button type="button" class="chev check" data-visit="' + id + '" aria-pressed="' + done + '" aria-label="' + (done ? "Uncheck " : "Check off ") + esc(s.name) + '">' + icon("check") + "</button>" : "") +
-      '<button type="button" class="chev" data-open="' + id + '" aria-label="Open ' + esc(s.name) + '">' + icon("right") + "</button></div>";
+      '<span class="ln">' + statusHtml(s, state.day) + "</span>" + (sub ? '<span class="ln psub">' + esc(sub) + "</span>" : "") + "</span></button>" +
+      (s[state.day] || done ? '<button type="button" class="chev check" data-visit="' + id + '" aria-pressed="' + done + '" aria-label="' + (done ? "Uncheck " : "Check off ") + esc(s.name) + '">' + icon("check") + "</button>" : "") + "</div>";
+  }
+  function renderPeek() {
+    if (peekBusy) return;
+    var cur = view.sel && byId[view.sel] ? view.sel : nextId();
+    var ids = view.sch.rows.map(function (r) { return r.id; });
+    if (cur && ids.indexOf(cur) < 0) ids.unshift(cur);
+    if (!ids.length) { peekEl.innerHTML = ""; peekIds = []; return; }
+    peekIds = ids; peekIdx = Math.max(0, ids.indexOf(cur));
+    peekEl.innerHTML = '<div class="ptrack" role="group" aria-roledescription="carousel" aria-label="Stops, swipe for more">' +
+      ids.map(peekSlide).join("") + "</div>" +
+      (ids.length > 1 ? '<div class="pdots" aria-hidden="true">' + ids.map(function (id, k) { return "<i" + (k === peekIdx ? ' class="on"' : "") + "></i>"; }).join("") + "</div>" : "");
+    var track = peekEl.querySelector(".ptrack");
+    track.scrollLeft = peekIdx * slideStep(track);
+    track.addEventListener("scroll", onPeekScroll, { passive: true });
+    track.addEventListener("touchstart", function () { peekBusy = true; }, { passive: true });
+    track.addEventListener("touchend", function () { setTimeout(function () { peekBusy = false; }, 400); }, { passive: true });
+  }
+  function slideStep(track) {
+    var a = track.children[0], b = track.children[1];
+    return (b ? b.offsetLeft - a.offsetLeft : 0) || track.clientWidth || 1;
+  }
+  function onPeekScroll(e) {
+    var track = e.currentTarget;
+    clearTimeout(peekTimer);
+    peekTimer = setTimeout(function () {
+      var k = Math.max(0, Math.min(peekIds.length - 1, Math.round(track.scrollLeft / slideStep(track))));
+      peekEl.querySelectorAll(".pdots i").forEach(function (d, j) { d.classList.toggle("on", j === k); });
+      if (k === peekIdx) return;
+      peekIdx = k;
+      var id = peekIds[k], st = byId[id];
+      view.sel = id;
+      drawMap(); highlightRow(id);
+      // Keep the stop visible above the card.
+      map.panInside([st.lat, st.lng], { paddingTopLeft: [40, 190], paddingBottomRight: [40, peekEl.offsetHeight + 90] });
+    }, 90);
   }
 
   function renderDetail() {
@@ -652,6 +687,7 @@
   app.addEventListener("click", function (e) {
     var b = e.target.closest("button, a");
     if (!b || !app.contains(b)) return;
+    peekBusy = false;
     var d = b.dataset;
     if (d.open) { go("stop/" + d.open); return; }
     if (d.add) { addStop(d.add); return; }
