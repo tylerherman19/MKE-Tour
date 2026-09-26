@@ -119,6 +119,9 @@ p { margin: 0; }
 }
 .peek:empty { display: none; }
 .grab { width: 40px; height: 5px; border-radius: 3px; background: var(--line); margin: 4px auto 8px; }
+.grabbtn { position: sticky; top: -6px; z-index: 2; display: block; width: 100%; height: 30px; margin: -6px 0 -12px; padding: 12px 0 0; border: 0; background: linear-gradient(var(--sheet) 70%, transparent); cursor: grab; touch-action: none; }
+.grabbtn .grab { display: block; width: 44px; height: 5px; margin: 0 auto; background: color-mix(in srgb, var(--muted) 45%, transparent); }
+.sheethead { touch-action: pan-x; }
 .peek .card { display: grid; grid-template-columns: 116px 1fr; gap: 14px; align-items: center; width: 100%; border: 0; background: none; padding: 0; text-align: left; }
 .peek .pth { width: 116px; height: 88px; border-radius: 14px; }
 .kick { display: block; font-size: 11px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
@@ -334,7 +337,6 @@ img.broken { visibility: hidden; }
   .mapbtns { right: 20px; top: 24px; }
   .peek { left: calc(var(--panel-w) + 20px); right: auto; width: 400px; bottom: 24px; }
   [data-view="stop"] .peek { display: none; }
-  .sheet > .grab { display: none; }
   .sheet, .detail { left: 0; right: auto; width: var(--panel-w); top: 0; border-radius: 0; box-shadow: 1px 0 0 var(--line); }
   .sheet { bottom: var(--tab-h); transform: none; }
   .detail { bottom: var(--tab-h); transform: none; }
