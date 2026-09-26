@@ -183,7 +183,7 @@ img.broken { visibility: hidden; }
 .progress button { border: 0; background: none; color: var(--accent); font-weight: 600; font-size: 13px; padding: 4px 0; }
 /* timeline */
 .timeline { list-style: none; margin: 14px 16px 0; padding: 0; background: var(--card); border: 1px solid var(--line); border-radius: 20px; overflow: hidden; }
-.stop { position: relative; display: grid; grid-template-columns: 44px 1fr 40px; align-items: center; padding: 10px 8px 10px 12px; border-top: 1px solid var(--line); }
+.stop { position: relative; display: grid; grid-template-columns: 42px 1fr 42px 24px; align-items: center; padding: 10px 8px 10px 12px; border-top: 1px solid var(--line); }
 .stop:first-child { border-top: 0; }
 .stop::before { content: ""; position: absolute; left: 33px; top: 0; bottom: 0; width: 2px; background: var(--line); }
 .stop:first-child::before { top: 50%; }
@@ -193,25 +193,28 @@ img.broken { visibility: hidden; }
 .stop.sel { background: var(--accent-soft); }
 .num { position: relative; z-index: 1; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--navy); color: var(--navy-ink); font: 600 15px/1 var(--body); font-variant-numeric: tabular-nums; }
 .stop.sel .num { background: var(--accent); color: #fff; }
-button.num { border: 0; padding: 0; }
+.checkbox { width: 36px; height: 36px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--muted) 55%, transparent); background: var(--card); color: color-mix(in srgb, var(--muted) 45%, transparent); display: grid; place-items: center; padding: 0; justify-self: center; }
+.checkbox:hover { color: var(--muted); border-color: var(--muted); }
+.checkbox[aria-pressed="true"] { background: var(--open); border-color: var(--open); color: #fff; }
 .stop.done .num { background: var(--open); color: #fff; }
 .stop.done .th img { opacity: .75; }
 .stop.done .nm { color: var(--muted); }
 .stop.off .num { background: transparent; color: var(--muted); border: 2px dashed var(--line); }
-.stop .card { display: grid; grid-template-columns: 78px 1fr; gap: 12px; align-items: center; border: 0; background: none; padding: 0; text-align: left; min-width: 0; }
-.th { width: 78px; height: 78px; border-radius: 12px; }
+.stop .card { display: grid; grid-template-columns: 64px 1fr; gap: 12px; align-items: center; border: 0; background: none; padding: 0; text-align: left; min-width: 0; }
+.th { width: 64px; height: 64px; border-radius: 12px; }
 .th.sm { width: 60px; height: 60px; }
 .stop.off .th img { filter: grayscale(1); opacity: .7; }
 .txt { display: grid; gap: 3px; min-width: 0; }
 .nm { font: 19px/1.2 var(--display); }
 .stop.off .nm { color: var(--muted); }
 .ln .arr { margin-left: 0; }
+.ln .ic { margin-right: -1px; }
 .ln { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .flag { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: var(--chip); color: var(--muted); justify-self: start; }
 .flag.ok { display: inline-flex; align-items: center; gap: 4px; background: color-mix(in srgb, var(--open) 16%, transparent); color: var(--open); }
 .flag.warn { background: var(--warn-bg); color: var(--warn); }
 .flag.bad { background: var(--bad-bg); color: var(--bad); }
-.grip { display: grid; place-items: center; height: 44px; color: var(--muted); cursor: grab; touch-action: none; opacity: .7; }
+.grip { display: grid; place-items: center; height: 44px; width: 24px; color: var(--muted); cursor: grab; touch-action: none; opacity: .7; }
 .grip:active { cursor: grabbing; }
 .stop.off .grip { visibility: hidden; }
 .editrow { display: none; grid-column: 2 / -1; gap: 8px; margin-top: 8px; }
@@ -344,7 +347,7 @@ button.num { border: 0; padding: 0; }
   .brand h1 { font-size: 34px; } .brand h1 span { font-size: 50px; }
   .peek .card { grid-template-columns: 92px 1fr; gap: 10px; }
   .peek .pth { width: 92px; height: 76px; }
-  .th { width: 64px; height: 64px; }
-  .stop .card { grid-template-columns: 64px 1fr; }
+  .th { width: 56px; height: 56px; }
+  .stop .card { grid-template-columns: 56px 1fr; gap: 10px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
