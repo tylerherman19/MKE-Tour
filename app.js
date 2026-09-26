@@ -724,6 +724,51 @@
   document.getElementById("q").addEventListener("input", function (e) { view.q = e.target.value; renderList(); });
   window.addEventListener("resize", function () { map.invalidateSize(); });
 
+  // Phone layout: pull a sheet down (by its handle/header, or from the top of its
+  // content) to close it and go back to the map. Tapping the handle does the same.
+  function closeSheet(sheet) {
+    sheet.style.transition = "transform .2s ease";
+    sheet.style.transform = "translateY(100%)";
+    go("map");
+    setTimeout(function () { sheet.style.transition = ""; sheet.style.transform = ""; }, 260);
+  }
+  document.querySelectorAll(".sheet").forEach(function (sheet) {
+    var y0 = null, dy = 0, t0 = 0, handle = false, pulling = false;
+    sheet.querySelector(".grabbtn").addEventListener("click", function () { closeSheet(sheet); });
+    sheet.addEventListener("touchstart", function (e) {
+      y0 = null;
+      if (desktop.matches || e.touches.length > 1) return;
+      var t = e.target;
+      handle = !!t.closest(".grabbtn, .sheethead");
+      if (!handle && (sheet.scrollTop > 0 || t.closest(".grip, input, .chips, .cards"))) return;
+      y0 = e.touches[0].clientY; dy = 0; t0 = Date.now(); pulling = false;
+    }, { passive: true });
+    sheet.addEventListener("touchmove", function (e) {
+      if (y0 == null) return;
+      dy = e.touches[0].clientY - y0;
+      if (!pulling) {
+        // Scrolling up, or content already scrolled: leave it to the browser.
+        if (dy < 0 || (!handle && sheet.scrollTop > 0)) { y0 = null; return; }
+        if (dy < 6) return;
+        pulling = true;
+        sheet.style.transition = "none";
+      }
+      e.preventDefault();
+      sheet.style.transform = "translateY(" + Math.max(0, dy) + "px)";
+    }, { passive: false });
+    function end() {
+      if (y0 == null) return;
+      y0 = null;
+      if (!pulling) return;
+      pulling = false;
+      var fast = dy > 40 && dy / Math.max(1, Date.now() - t0) > 0.6;
+      if (dy > 120 || fast) closeSheet(sheet);
+      else { sheet.style.transition = "transform .2s ease"; sheet.style.transform = ""; setTimeout(function () { sheet.style.transition = ""; }, 220); }
+    }
+    sheet.addEventListener("touchend", end);
+    sheet.addEventListener("touchcancel", end);
+  });
+
   // Keep "open now" and the up-next card current during the event.
   setInterval(function () { if (!dragging && todayKey()) render(); }, 60000);
 
